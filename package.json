@@ -27,7 +27,7 @@
 		"@biomejs/biome": "^1.9",
 		"knip": "^5.85.0",
 		"simple-git-hooks": "^2.13.1",
-		"supabase": "^2.81.3",
+		"supabase": "^2.111.0",
 		"vercel": "^50.33.1"
 	},
 	"pnpm": {
