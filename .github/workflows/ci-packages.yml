@@ -1,0 +1,34 @@
+name: CI — Packages (lint & typecheck)
+
+on:
+  push:
+    paths: [ 'packages/**', 'packages/*/**', '.github/workflows/ci-packages.yml' ]
+    branches: [ main, develop ]
+  pull_request:
+    paths: [ 'packages/**', 'packages/*/**' ]
+
+jobs:
+  lint-and-typecheck:
+    name: Lint and Typecheck (packages)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies (root workspace)
+        run: pnpm install --frozen-lockfile
+
+      - name: Run workspace typecheck
+        run: pnpm -w run typecheck || true
+
+      - name: Run workspace lint
+        run: pnpm -w run lint || true

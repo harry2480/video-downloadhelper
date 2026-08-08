@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  detect-changes:
+    name: 変更ファイルを検出
+    runs-on: ubuntu-latest
+    outputs:
+      app-changed: ${{ steps.changes.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 変更ファイルを確認
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.event.pull_request.base.ref }}" --no-tags
+            BASE="origin/${{ github.event.pull_request.base.ref }}"
+            HEAD="HEAD"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.event.after }}"
+
+            if [ "$BASE" = "0000000000000000000000000000000000000000" ] || [ -z "$BASE" ]; then
+              BASE="origin/develop"
+            elif ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              echo "⚠️ BASE ($BASE) が存在しません（force push の可能性）。origin/develop にフォールバック"
+              BASE="origin/develop"
+            fi
+          fi
+
+          APP_CHANGED=$(git diff --name-only "$BASE" "$HEAD" | grep -q "^app/" && echo "true" || echo "false")
+
+          echo "app=$APP_CHANGED" >> $GITHUB_OUTPUT
+          echo "app-changed: $APP_CHANGED"
+
+  typecheck-build-test:
+    name: 型チェック・ビルド・テスト
+    needs: detect-changes
+    if: needs.detect-changes.outputs.app-changed == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: コードをチェックアウト
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: pnpm をセットアップ
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Node.js をセットアップ（pnpm キャッシュ付き）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: 依存関係をインストール
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript 型チェック（プロジェクトローカルのTSC使用）
+        run: pnpm exec tsc --noEmit
+
+      - name: 単体テスト（Vitest）
+        run: pnpm test
+
+      - name: Vite プロダクションビルド
+        run: pnpm vite build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'placeholder-key' }}
+          VITE_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key' }}
+          VITE_GITHUB_TOKEN: ${{ secrets.VITE_GITHUB_TOKEN || '' }}
+
+  e2e-tests:
+    name: E2Eテスト（Playwright）
+    needs: detect-changes
+    if: needs.detect-changes.outputs.app-changed == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: コードをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: pnpm をセットアップ
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Node.js をセットアップ（pnpm キャッシュ付き）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: 依存関係をインストール
+        run: pnpm install --frozen-lockfile
+
+      - name: Playwright ブラウザをインストール
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2Eテストを実行
+        run: pnpm test:e2e
+        env:
+          CI: true
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'placeholder-key' }}
+
+      - name: Playwright レポートをアップロード（失敗時）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: app/playwright-report/
+          retention-days: 7
+
+  ci-status:
+    name: CI ステータス確認
+    needs: [detect-changes, typecheck-build-test, e2e-tests]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: CI 結果を確認
+        run: |
+          echo "app-changed: ${{ needs.detect-changes.outputs.app-changed }}"
+
+          if [ "${{ needs.detect-changes.outputs.app-changed }}" = "true" ]; then
+            if [ "${{ needs.typecheck-build-test.result }}" != "success" ]; then
+              echo "❌ app CI failed (typecheck/build/test)"
+              exit 1
+            fi
+            if [ "${{ needs.e2e-tests.result }}" != "success" ]; then
+              echo "❌ e2e CI failed"
+              exit 1
+            fi
+            echo "✅ app CI passed"
+          else
+            echo "⊘ app に変更なし（スキップ）"
+          fi

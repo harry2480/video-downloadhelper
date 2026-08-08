@@ -1,0 +1,46 @@
+{
+	"name": "product-starter",
+	"private": true,
+	"packageManager": "pnpm@10.18.1",
+	"scripts": {
+		"dev": "pnpm --filter webapp dev",
+		"build": "pnpm --filter webapp build",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"typecheck": "pnpm --filter webapp typecheck",
+		"verify": "pnpm lint && pnpm --filter webapp prisma generate && pnpm typecheck && pnpm test:unit && pnpm depcruise",
+		"test:unit": "pnpm --filter webapp test:unit",
+		"test:coverage": "pnpm --filter webapp test:coverage",
+		"test:integration": "pnpm --filter webapp test:integration",
+		"depcruise": "pnpm --filter webapp depcruise",
+		"knip": "knip",
+		"db:seed": "pnpm --filter webapp prisma db seed",
+		"db:reset": "pnpm --filter webapp prisma migrate reset",
+		"db:migrate": "pnpm --filter webapp prisma migrate dev",
+		"prepare": "simple-git-hooks"
+	},
+	"simple-git-hooks": {
+		"pre-commit": "pnpm lint:fix",
+		"pre-push": "pnpm verify"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9",
+		"knip": "^5.85.0",
+		"simple-git-hooks": "^2.13.1",
+		"supabase": "^2.81.3",
+		"vercel": "^50.33.1"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": [
+			"@biomejs/biome",
+			"@prisma/client",
+			"@prisma/engines",
+			"esbuild",
+			"prisma",
+			"sharp",
+			"simple-git-hooks",
+			"supabase"
+		],
+		"ignoredBuiltDependencies": ["supabase"]
+	}
+}
