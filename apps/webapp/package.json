@@ -38,7 +38,7 @@
 		"@vitest/coverage-v8": "^3.2.4",
 		"dependency-cruiser": "^16",
 		"dotenv": "^17.3.1",
-		"prisma": "^6",
+		"prisma": "^7",
 		"tailwindcss": "^4",
 		"tsx": "^4",
 		"typescript": "^5.7",
