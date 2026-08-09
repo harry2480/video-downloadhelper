@@ -6,11 +6,25 @@ export type Harness = ExtensionContext & { server: StaticServer };
 
 export async function startHarness(): Promise<Harness> {
 	const server = await startStaticServer();
-	const extension = await launchExtension();
-	const harness: Harness = { ...extension, server };
 
-	await waitForExtensionReady(harness);
-	return harness;
+	// 起動途中で失敗しても静的サーバーを閉じる。
+	// 開いたままだとハンドルが残り、テストプロセスが終了しなくなる
+	try {
+		const extension = await launchExtension();
+		const harness: Harness = { ...extension, server };
+
+		try {
+			await waitForExtensionReady(harness);
+		} catch (error) {
+			await extension.close();
+			throw error;
+		}
+
+		return harness;
+	} catch (error) {
+		await server.close();
+		throw error;
+	}
 }
 
 /**
@@ -42,8 +56,14 @@ async function waitForExtensionReady(harness: Harness): Promise<void> {
 }
 
 export async function stopHarness(harness: Harness | undefined): Promise<void> {
-	await harness?.close();
-	await harness?.server.close();
+	if (!harness) return;
+
+	// ブラウザの終了に失敗しても静的サーバーは必ず閉じる
+	try {
+		await harness.close();
+	} finally {
+		await harness.server.close();
+	}
 }
 
 /**

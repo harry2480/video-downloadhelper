@@ -1,5 +1,6 @@
 import { isBlockedUrl } from '../media/blocklist';
 import type { DetectionInput } from '../media/detected-media.model';
+import { fireAndForget } from './fire-and-forget';
 import type { MediaRegistry } from './media-registry';
 
 /**
@@ -61,7 +62,12 @@ export function registerRequestDetector(registry: MediaRegistry): void {
 	chrome.webRequest.onHeadersReceived.addListener(
 		(details) => {
 			// タブに紐づかないリクエスト（Service Worker 自身の再フェッチ等）は対象外
-			if (details.tabId >= 0) void handleResponse(registry, details);
+			if (details.tabId >= 0) {
+				// 世代はイベントを受け取った時点で確定させる。
+				// await をまたいでから取ると、通常遷移後の世代を拾ってしまう
+				const generation = registry.currentGeneration(details.tabId);
+				fireAndForget(handleResponse(registry, details, generation), 'メディア検出');
+			}
 
 			// 観測専用。通信のブロック・改変は行わないため常に undefined を返す
 			return undefined;
@@ -74,6 +80,7 @@ export function registerRequestDetector(registry: MediaRegistry): void {
 async function handleResponse(
 	registry: MediaRegistry,
 	details: chrome.webRequest.OnHeadersReceivedDetails,
+	generation: number,
 ): Promise<void> {
 	// リダイレクトやエラーレスポンスを保存対象にしない
 	if (details.statusCode < 200 || details.statusCode >= 300) return;
@@ -98,5 +105,5 @@ async function handleResponse(
 		...(contentLength !== undefined && { estimatedSize: contentLength }),
 	};
 
-	await registry.register(input);
+	await registry.register(input, generation);
 }

@@ -4,8 +4,10 @@ export default defineConfig({
 	test: {
 		globals: true,
 		environment: 'node',
-		// コアロジック層のみを対象とする。実行コンテキスト層は Integration / E2E で担保する。
-		include: ['src/{shared,media,processor}/**/*.test.ts'],
+		// コアロジック層に加えて、実行コンテキスト層のうち chrome.* に触れない
+		// オーケストレーター（MediaRegistry 等）も対象にする。
+		// chrome.* に依存するコードはここでは動かない（モックで通そうとしないこと）。
+		include: ['src/**/*.test.ts'],
 		passWithNoTests: true,
 		coverage: {
 			provider: 'v8',

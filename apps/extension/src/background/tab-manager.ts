@@ -1,3 +1,4 @@
+import { fireAndForget } from './fire-and-forget';
 import type { MediaRegistry } from './media-registry';
 
 /**
@@ -15,7 +16,9 @@ import type { MediaRegistry } from './media-registry';
 export function registerTabLifecycle(registry: MediaRegistry): void {
 	chrome.webRequest.onBeforeRequest.addListener(
 		(details) => {
-			if (details.tabId >= 0) void registry.clearTab(details.tabId);
+			if (details.tabId >= 0) {
+				fireAndForget(registry.clearTab(details.tabId), '検出結果のクリア');
+			}
 
 			// 観測専用。通信のブロック・改変は行わないため常に undefined を返す
 			return undefined;
@@ -24,12 +27,12 @@ export function registerTabLifecycle(registry: MediaRegistry): void {
 	);
 
 	chrome.tabs.onRemoved.addListener((tabId) => {
-		void registry.clearTab(tabId);
+		fireAndForget(registry.clearTab(tabId), '検出結果の破棄');
 	});
 
 	// タブが破棄され別プロセスで復元された場合、旧 tabId の結果は不要になる
 	chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
-		void registry.clearTab(removedTabId);
-		void registry.clearTab(addedTabId);
+		fireAndForget(registry.clearTab(removedTabId), '検出結果の破棄');
+		fireAndForget(registry.clearTab(addedTabId), '検出結果の破棄');
 	});
 }

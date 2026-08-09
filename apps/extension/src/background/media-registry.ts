@@ -23,22 +23,51 @@ export class MediaRegistry {
 	 */
 	private readonly queues = new Map<number, Promise<unknown>>();
 
+	/**
+	 * タブごとの世代番号。ページ遷移のたびに 1 つ進める。
+	 *
+	 * 検出は「イベント発生 → 非同期でタブ情報を取得 → 登録」という流れで、
+	 * イベント発生から登録までに間がある。この間に通常遷移が起きると、
+	 * クリア済みのタブへ旧ページの検出結果を書き戻してしまう。
+	 * 世代を突き合わせて、遷移前のイベント由来の登録を破棄する。
+	 *
+	 * タブ ID をキーにした数値のみで、閉じたタブの分も残す。
+	 * 消すと世代が 0 に戻り、遅れて届いた旧登録と一致してしまうため。
+	 */
+	private readonly generations = new Map<number, number>();
+
 	constructor(
 		private readonly repository: DetectedMediaRepository,
 		private readonly onTabChanged: (tabId: number, media: DetectedMedia[]) => void,
 	) {}
 
 	/**
+	 * 現在の世代を返す。
+	 *
+	 * **イベントを受け取った時点で同期的に呼ぶこと。** `await` をまたいでから
+	 * 呼ぶと遷移後の世代を拾ってしまい、この仕組みが意味をなさなくなる。
+	 */
+	currentGeneration(tabId: number): number {
+		return this.generations.get(tabId) ?? 0;
+	}
+
+	/**
 	 * 検出候補を取り込む。
 	 *
 	 * 生成に失敗した候補（blob URL、対応外形式など）は黙って捨てる。
 	 * 検出は「候補を拾って絞る」処理であり、絞られること自体は異常ではない。
+	 *
+	 * @param generation イベントを受け取った時点の世代。遷移後なら破棄する
 	 */
-	async register(input: DetectionInput): Promise<void> {
+	async register(input: DetectionInput, generation: number): Promise<void> {
 		const created = createDetectedMedia(input);
 		if (!created.ok) return;
+		if (generation !== this.currentGeneration(input.tabId)) return;
 
 		await this.enqueue(input.tabId, async () => {
+			// キューを待っている間にも遷移し得るため、保存の直前に再確認する
+			if (generation !== this.currentGeneration(input.tabId)) return;
+
 			const current = await this.repository.findByTab(input.tabId);
 			const next = upsertDetectedMedia(current, created.value);
 
@@ -51,8 +80,15 @@ export class MediaRegistry {
 		return this.enqueue(tabId, () => this.repository.findByTab(tabId));
 	}
 
-	/** ページ遷移・タブ破棄時に呼ぶ。 */
+	/**
+	 * ページ遷移・タブ破棄時に呼ぶ。
+	 *
+	 * 世代の更新はキューに入れず、呼ばれた時点で同期的に行う。
+	 * キューの中で進めると、順番待ちしている旧世代の登録が先に保存される。
+	 */
 	async clearTab(tabId: number): Promise<void> {
+		this.generations.set(tabId, this.currentGeneration(tabId) + 1);
+
 		await this.enqueue(tabId, async () => {
 			await this.repository.clearTab(tabId);
 			this.onTabChanged(tabId, []);
