@@ -157,6 +157,36 @@ describe('parseMasterPlaylist', () => {
 		expect(parsed.audioRenditions[1]?.isDefault).toBe(false);
 	});
 
+	it('音声以外の #EXT-X-MEDIA を音声トラックとして扱わない', () => {
+		const content = `#EXTM3U
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub",NAME="日本語",URI="sub/ja.m3u8"
+#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="CC1"
+#EXT-X-MEDIA:GROUP-ID="x",NAME="TYPE なし"
+#EXT-X-STREAM-INF:BANDWIDTH=100
+v.m3u8`;
+		expect(unwrap(parseMasterPlaylist(content, BASE_URL)).audioRenditions).toEqual([]);
+	});
+
+	it('GROUP-ID や NAME を欠く #EXT-X-MEDIA を採用しない', () => {
+		const content = `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,NAME="GROUP-ID なし"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="NAME なし"
+#EXT-X-STREAM-INF:BANDWIDTH=100
+v.m3u8`;
+		expect(unwrap(parseMasterPlaylist(content, BASE_URL)).audioRenditions).toEqual([]);
+	});
+
+	it('対応する #EXT-X-STREAM-INF を持たない URI 行を無視する', () => {
+		const content = `#EXTM3U
+orphan.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=100
+v.m3u8`;
+		const parsed = unwrap(parseMasterPlaylist(content, BASE_URL));
+
+		expect(parsed.variants).toHaveLength(1);
+		expect(parsed.variants[0]?.uri).toContain('v.m3u8');
+	});
+
 	it('URI を持たない多重化済み音声トラックを許容する', () => {
 		const content = `#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="main",DEFAULT=YES
@@ -253,6 +283,20 @@ v.m3u8`;
 
 			expect(parsed.variants).toHaveLength(1);
 			expect(parsed.variants[0]?.width).toBeUndefined();
+		});
+
+		it('桁数が過大な RESOLUTION を採用しない', () => {
+			// 正規表現は数字であることしか保証しない。桁が多すぎると
+			// Number() が Infinity になり、そのまま UI へ流れてしまう
+			const huge = '9'.repeat(400);
+			const content = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=100,RESOLUTION=${huge}x1080
+v.m3u8`;
+			const parsed = unwrap(parseMasterPlaylist(content, BASE_URL));
+
+			expect(parsed.variants).toHaveLength(1);
+			expect(parsed.variants[0]?.width).toBeUndefined();
+			expect(parsed.variants[0]?.height).toBeUndefined();
 		});
 
 		it('URI 行が解決できなければ invalid-uri', () => {
@@ -463,6 +507,29 @@ seg.ts
 #EXT-X-ENDLIST`;
 			expect(unwrap(parseMediaPlaylist(content, MEDIA_BASE)).encryption.method).toBe('drm');
 		});
+
+		it('KEYFORMAT が DRM でなくても METHOD=SAMPLE-AES なら DRM として扱う', () => {
+			// SAMPLE-AES はサンプル単位の暗号化で、AES-128 の標準的な再構成では復号できない
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=SAMPLE-AES,URI="https://cdn.example.com/keys/k.bin",KEYFORMAT="identity"
+#EXTINF:6.0,
+seg.ts
+#EXT-X-ENDLIST`;
+			const encryption = unwrap(parseMediaPlaylist(content, MEDIA_BASE)).encryption;
+
+			expect(encryption).toEqual({ method: 'drm', reason: 'METHOD=SAMPLE-AES' });
+		});
+
+		it('AES-128 で URI を欠く壊れた鍵指定を暗号化なしのまま扱う', () => {
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128
+#EXTINF:6.0,
+seg.ts
+#EXT-X-ENDLIST`;
+			expect(unwrap(parseMediaPlaylist(content, MEDIA_BASE)).encryption).toEqual({
+				method: 'none',
+			});
+		});
 	});
 
 	describe('異常系', () => {
@@ -480,6 +547,17 @@ seg.ts
 			});
 		});
 
+		it('空文字は empty-playlist', () => {
+			expect(parseMediaPlaylist('', MEDIA_BASE)).toEqual({
+				ok: false,
+				error: { type: 'empty-playlist' },
+			});
+			expect(parseMediaPlaylist('   \n\n  \n', MEDIA_BASE)).toEqual({
+				ok: false,
+				error: { type: 'empty-playlist' },
+			});
+		});
+
 		it('#EXTINF のないセグメント行も拾う（duration は 0 とする）', () => {
 			const content = '#EXTM3U\nseg.ts\n#EXT-X-ENDLIST';
 			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
@@ -491,6 +569,63 @@ seg.ts
 		it('#EXTINF の値が壊れていても 0 として続行する', () => {
 			const content = '#EXTM3U\n#EXTINF:broken,\nseg.ts\n#EXT-X-ENDLIST';
 			expect(unwrap(parseMediaPlaylist(content, MEDIA_BASE)).segments[0]?.duration).toBe(0);
+		});
+
+		it('URI を欠く #EXT-X-MAP を無視して続行する', () => {
+			const content = `#EXTM3U
+#EXT-X-MAP:BYTERANGE="720@0"
+#EXTINF:6.0,
+seg.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.initSegment).toBeUndefined();
+			expect(parsed.segmentFormat).toBe('ts');
+		});
+
+		describe('baseUrl が不正で相対 URI を解決できない場合', () => {
+			it('セグメント URI で invalid-uri を返す', () => {
+				const content = '#EXTM3U\n#EXTINF:6.0,\nseg.ts\n#EXT-X-ENDLIST';
+				expect(parseMediaPlaylist(content, 'not a url')).toEqual({
+					ok: false,
+					error: { type: 'invalid-uri', input: 'seg.ts' },
+				});
+			});
+
+			it('AES-128 の鍵 URI で invalid-uri を返す', () => {
+				const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="keys/k.bin"
+#EXTINF:6.0,
+seg.ts
+#EXT-X-ENDLIST`;
+				expect(parseMediaPlaylist(content, 'not a url')).toEqual({
+					ok: false,
+					error: { type: 'invalid-uri', input: 'keys/k.bin' },
+				});
+			});
+
+			it('#EXT-X-MAP の URI で invalid-uri を返す', () => {
+				const content = `#EXTM3U
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:6.0,
+seg.m4s
+#EXT-X-ENDLIST`;
+				expect(parseMediaPlaylist(content, 'not a url')).toEqual({
+					ok: false,
+					error: { type: 'invalid-uri', input: 'init.mp4' },
+				});
+			});
+
+			it('#EXT-X-MEDIA の URI で invalid-uri を返す', () => {
+				const content = `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="ja",URI="audio/ja.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO="a"
+v.m3u8`;
+				expect(parseMasterPlaylist(content, 'not a url')).toEqual({
+					ok: false,
+					error: { type: 'invalid-uri', input: 'audio/ja.m3u8' },
+				});
+			});
 		});
 	});
 });

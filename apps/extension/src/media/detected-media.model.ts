@@ -135,14 +135,13 @@ export function upsertDetectedMedia(
 	list: readonly DetectedMedia[],
 	incoming: DetectedMedia,
 ): DetectedMedia[] {
-	const index = list.findIndex((m) => m.dedupeKey === incoming.dedupeKey);
-	if (index === -1) return [...list, incoming];
+	let merged = false;
 
-	const existing = list[index];
-	// findIndex が返した位置なので存在するが、noUncheckedIndexedAccess のため確認する
-	if (!existing) return [...list, incoming];
+	const next = list.map((existing) => {
+		if (existing.dedupeKey !== incoming.dedupeKey) return existing;
+		merged = true;
+		return mergeDetectedMedia(existing, incoming);
+	});
 
-	const next = [...list];
-	next[index] = mergeDetectedMedia(existing, incoming);
-	return next;
+	return merged ? next : [...next, incoming];
 }
