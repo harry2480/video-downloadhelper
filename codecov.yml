@@ -16,8 +16,10 @@ coverage:
         target: 80%
         threshold: 0%
 
-# 計測対象はコアロジック層（shared/ media/ processor/）に限定する。
-# 実行コンテキスト層（background/ offscreen/ content/ popup/）は Integration / E2E で担保する。
+# 計測対象は「Unit テストで検証する層」に限定する。
+# 実行コンテキスト層（background/ offscreen/ content/ popup/）と
+# shared/storage/（chrome.storage を直接呼ぶ Repository）は
+# Integration / E2E で担保するため、Unit のカバレッジ計測から外す。
 ignore:
   - "**/*.test.ts"
   - "**/*.test.tsx"
@@ -28,6 +30,7 @@ ignore:
   - "apps/extension/src/offscreen/**"
   - "apps/extension/src/content/**"
   - "apps/extension/src/popup/**"
+  - "apps/extension/src/shared/storage/**"
 
 # PR にカバレッジコメントを投稿
 comment:

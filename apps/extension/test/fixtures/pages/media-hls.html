@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<title>HLS マニフェストを読み込むページ</title>
+	</head>
+	<body>
+		<h1>XHR から m3u8 取得</h1>
+		<p>hls.js 等が行う取得方法を最小限で再現する（xmlhttprequest として観測される）。</p>
+		<script>
+			// fetch ではなく XHR を使う。webRequest 上の resourceType が
+			// xmlhttprequest になることを確かめるため
+			const request = new XMLHttpRequest();
+			request.open('GET', 'hls/master.m3u8');
+			request.send();
+		</script>
+	</body>
+</html>

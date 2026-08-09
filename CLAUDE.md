@@ -48,7 +48,7 @@ pnpm workspace monorepo。`apps/extension/` に Vite + `@crxjs/vite-plugin` + Re
 
 ```
 apps/extension/src/
-├── background/          # Service Worker（index.ts が Composition Root）
+├── background/          # Service Worker（service-worker.ts が Composition Root）
 │   ├── request-detector.ts
 │   ├── media-registry.ts
 │   ├── download-manager.ts
@@ -75,7 +75,7 @@ apps/extension/src/
 - Rich Domain Model 必須。URL 正規化・重複判定・DRM 判定はモデル/`media/` に閉じる
 - 解析失敗は `Result<T, E>` 型で返す。実行コンテキスト層でユーザー向けメッセージへ変換
 - `chrome.storage` へのアクセスは `shared/storage/*.repository.ts` に集約。他から直接呼ばない
-- `index.ts` バレルエクスポート禁止（各エントリの index.ts はエントリポイントとしてのみ存在）
+- `index.ts` バレルエクスポート禁止。**エントリのファイル名は全コンテキストで一意にする**（すべて `index.ts` にすると CRXJS が SW ローダーを別バンドルへ紐づけ、静かに壊れる）
 - **Popup は状態を所有しない。** 検出結果・進捗は Background が所有し、Popup は購読して描画するだけ
 - **Service Worker は常駐しない前提で書く。** 長時間処理は Offscreen Document へ委譲し、状態は storage から復元可能な形で保持する
 - 拡張機能内部メッセージは `sender.id !== chrome.runtime.id` を破棄して送信元を検証する
