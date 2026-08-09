@@ -16,10 +16,22 @@ import type { DetectedMedia, MediaType, MediaVariant } from '../shared/types';
 const ILLEGAL_CHARACTERS = /[<>:"/\\|?*\x00-\x1f]/g;
 
 /**
- * Windows の予約デバイス名。拡張子を付けても予約のままなので使えない。
- * 大文字小文字を問わない。
+ * Windows の予約デバイス名。大文字小文字を問わない。
  */
-const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)$/i;
+
+/**
+ * Windows の予約デバイス名かどうか。
+ *
+ * **最初のドットより前で判定すること。** Windows はデバイス名を拡張子より
+ * 前の部分で解決するため、`CON.txt` も `CON` デバイスとして扱われる。
+ * 全体で比較すると `CON.txt.mp4` を作れてしまい、保存時に失敗する。
+ */
+function isReservedName(base: string): boolean {
+	const dotIndex = base.indexOf('.');
+	const firstSegment = dotIndex === -1 ? base : base.slice(0, dotIndex);
+	return RESERVED_NAMES.test(firstSegment.trim());
+}
 
 /**
  * ベース名の上限（UTF-8 バイト数）。
@@ -137,7 +149,7 @@ function pickBase(media: DetectedMedia): string {
 	for (const candidate of [media.title, media.pageTitle]) {
 		if (candidate === undefined) continue;
 		const sanitized = sanitizeFilenameBase(candidate);
-		if (sanitized.length > 0 && !RESERVED_NAMES.test(sanitized)) return sanitized;
+		if (sanitized.length > 0 && !isReservedName(sanitized)) return sanitized;
 	}
 
 	const fromUrl = filenameFromUrl(media.sourceUrl);
@@ -161,7 +173,7 @@ function filenameFromUrl(url: string): string | undefined {
 	const withoutExtension = dotIndex > 0 ? lastSegment.slice(0, dotIndex) : lastSegment;
 
 	const sanitized = sanitizeFilenameBase(decodeSafely(withoutExtension));
-	if (sanitized.length === 0 || RESERVED_NAMES.test(sanitized)) return undefined;
+	if (sanitized.length === 0 || isReservedName(sanitized)) return undefined;
 
 	return sanitized;
 }
