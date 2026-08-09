@@ -31,7 +31,7 @@ jobs:
         run: pnpm test:coverage
 
       - name: Codecov へアップロード
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: apps/extension/coverage/lcov.info
