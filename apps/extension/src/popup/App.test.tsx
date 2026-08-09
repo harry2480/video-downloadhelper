@@ -169,6 +169,98 @@ describe('メディア一覧', () => {
 	});
 });
 
+describe('品質選択', () => {
+	const hlsMedia = media({
+		type: 'hls',
+		manifestResolved: true,
+		variants: [
+			{ id: 'v0', url: 'https://cdn.example.com/1080.m3u8', height: 1080, bandwidth: 5_200_000 },
+			{ id: 'v1', url: 'https://cdn.example.com/720.m3u8', height: 720, bandwidth: 2_500_000 },
+			{ id: 'v2', url: 'https://cdn.example.com/480.m3u8', height: 480, bandwidth: 1_000_000 },
+		],
+	});
+
+	it('品質を radiogroup として提示する', async () => {
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [hlsMedia], blocked: false });
+
+		const options = await screen.findAllByRole('radio');
+		expect(options).toHaveLength(3);
+		expect(screen.getByText(/1080p/)).toBeInTheDocument();
+		expect(screen.getByText(/5\.2 Mbps/)).toBeInTheDocument();
+	});
+
+	it('既定で最高品質を選択する', async () => {
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [hlsMedia], blocked: false });
+
+		const [highest] = await screen.findAllByRole('radio');
+		expect(highest).toBeChecked();
+	});
+
+	it('キーボードだけで品質を切り替えられる', async () => {
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [hlsMedia], blocked: false });
+
+		const options = await screen.findAllByRole('radio');
+		options[0]?.focus();
+		await user.keyboard('{ArrowDown}');
+
+		expect(options[1]).toBeChecked();
+	});
+
+	it('品質が 1 つしかなければ選択 UI を出さない', async () => {
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [{ ...hlsMedia, variants: [hlsMedia.variants?.[0] as never] }],
+			blocked: false,
+		});
+
+		await screen.findByRole('list', { name: '検出したメディア' });
+		expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+	});
+});
+
+describe('マニフェスト解析の状態', () => {
+	it('解析前の HLS には確認中と表示する', async () => {
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media({ type: 'hls' })], blocked: false });
+
+		expect(await screen.findByText(/画質を確認しています/)).toBeInTheDocument();
+	});
+
+	it('解析済みなら確認中と表示しない', async () => {
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [media({ type: 'hls', manifestResolved: true })],
+			blocked: false,
+		});
+
+		await screen.findByRole('list', { name: '検出したメディア' });
+		expect(screen.queryByText(/画質を確認しています/)).not.toBeInTheDocument();
+	});
+
+	it('対応外の理由を表示する', async () => {
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [
+				media({
+					type: 'hls',
+					manifestResolved: true,
+					unsupportedReason: 'fMP4 セグメントの HLS には未対応です',
+				}),
+			],
+			blocked: false,
+		});
+
+		expect(await screen.findByText(/fMP4 セグメント/)).toBeInTheDocument();
+	});
+});
+
 describe('更新ボタン', () => {
 	it('押すと再スキャンを要求する', async () => {
 		const user = userEvent.setup();

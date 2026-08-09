@@ -1,5 +1,6 @@
 import {
 	type DetectionInput,
+	applyManifestAnalysis,
 	createDetectedMedia,
 	upsertDetectedMedia,
 } from '../media/detected-media.model';
@@ -92,6 +93,36 @@ export class MediaRegistry {
 
 	async list(tabId: number): Promise<DetectedMedia[]> {
 		return this.enqueue(tabId, () => this.repository.findByTab(tabId));
+	}
+
+	/**
+	 * 既存の検出結果へマニフェスト解析の結果を反映する。
+	 *
+	 * 対象がなければ何もしない。解析中にページ遷移やタブ破棄で
+	 * 消えることは通常起こり得る。
+	 */
+	async enrich(
+		tabId: number,
+		dedupeKey: string,
+		generation: number,
+		analysis: Parameters<typeof applyManifestAnalysis>[1],
+	): Promise<void> {
+		if (generation !== this.currentGeneration(tabId)) return;
+
+		await this.enqueue(tabId, async () => {
+			if (generation !== this.currentGeneration(tabId)) return;
+
+			const current = await this.repository.findByTab(tabId);
+			const index = current.findIndex((media) => media.dedupeKey === dedupeKey);
+			const target = current[index];
+			if (target === undefined) return;
+
+			const next = [...current];
+			next[index] = applyManifestAnalysis(target, analysis);
+
+			await this.repository.saveForTab(tabId, next);
+			this.onTabChanged(tabId, next);
+		});
 	}
 
 	/**

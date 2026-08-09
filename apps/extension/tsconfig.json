@@ -18,5 +18,6 @@
 		"verbatimModuleSyntax": true,
 		"types": ["chrome", "vite/client", "vitest/globals"]
 	},
-	"include": ["src", "test", "scripts", "*.config.ts", "*.config.mts"]
+	"include": ["src", "test", "scripts", "*.config.ts", "*.config.mts"],
+	"exclude": ["test/fixtures"]
 }
