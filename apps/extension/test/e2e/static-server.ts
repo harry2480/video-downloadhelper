@@ -36,8 +36,15 @@ export type StaticServer = {
 export async function startStaticServer(): Promise<StaticServer> {
 	const server = createServer((request, response) => {
 		void (async () => {
-			const requestPath = new URL(request.url ?? '/', 'http://localhost').pathname;
-			const resolved = path.resolve(FIXTURES_DIR, `.${requestPath}`);
+			const requestUrl = new URL(request.url ?? '/', 'http://localhost');
+			const resolved = path.resolve(FIXTURES_DIR, `.${requestUrl.pathname}`);
+
+			// `?delayMs=N` で応答を遅らせる。
+			// 「メタデータ読み込みが後から起きる」順序を確定させるために使う
+			const delayMs = Number(requestUrl.searchParams.get('delayMs'));
+			if (Number.isFinite(delayMs) && delayMs > 0) {
+				await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, 10_000)));
+			}
 
 			// フィクスチャディレクトリの外を読ませない
 			if (!resolved.startsWith(FIXTURES_DIR)) {

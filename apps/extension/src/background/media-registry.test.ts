@@ -89,6 +89,47 @@ describe('register', () => {
 	});
 });
 
+describe('タブあたりの上限', () => {
+	async function registerMany(registry: MediaRegistry, count: number, offset = 0): Promise<void> {
+		for (let index = 0; index < count; index++) {
+			await registry.register(input(`https://cdn.example.com/${offset + index}.mp4`), 0);
+		}
+	}
+
+	it('上限を超えた新規追加を取り込まない', async () => {
+		// DOM 検出は内容がページ側の操作で決まるため、上限がないと際限なく増える
+		const { registry, store } = createRegistry();
+
+		await registerMany(registry, 210);
+
+		expect(store.get(TAB_ID)).toHaveLength(200);
+	});
+
+	it('上限に達していても既存項目の統合は通す', async () => {
+		const { registry, store } = createRegistry();
+
+		await registerMany(registry, 200);
+		// 既に登録済みの URL を、より情報の多い検出方式で送り直す
+		await registry.register(input('https://cdn.example.com/0.mp4', { detectedBy: 'manifest' }), 0);
+
+		expect(store.get(TAB_ID)).toHaveLength(200);
+		expect(store.get(TAB_ID)?.[0]?.detectedBy).toBe('manifest');
+	});
+
+	it('クリア後は再び取り込める', async () => {
+		const { registry, store } = createRegistry();
+
+		await registerMany(registry, 200);
+		await registry.clearTab(TAB_ID);
+		await registry.register(
+			input('https://cdn.example.com/after.mp4'),
+			registry.currentGeneration(TAB_ID),
+		);
+
+		expect(store.get(TAB_ID)).toHaveLength(1);
+	});
+});
+
 describe('ページ遷移との競合', () => {
 	it('遷移前のイベント由来の登録を遷移後に保存しない', async () => {
 		const { registry, store } = createRegistry();

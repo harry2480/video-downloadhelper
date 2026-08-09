@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<title>メタデータを遅れて読み込むページ</title>
+	</head>
+	<body>
+		<h1>再生可能な動画（応答を遅延）</h1>
+		<!--
+			他のフィクスチャと違い、これは実際にデコードできる動画。
+
+			delayMs で応答を遅らせ、Content Script の初回走査より後に
+			loadedmetadata が起きる順序を確定させている。遅延がないと
+			1.4KB のファイルは初回走査より前に読み込まれてしまい、
+			「メタデータが後から増える」経路を検証できない。
+		-->
+		<video src="playable.webm?delayMs=2000" preload="metadata"></video>
+	</body>
+</html>

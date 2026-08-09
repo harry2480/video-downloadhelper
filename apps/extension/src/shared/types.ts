@@ -35,6 +35,21 @@ export type MediaVariant = {
 	estimatedSize?: number;
 };
 
+/**
+ * Content Script が `<video>` / `<audio>` から拾った検出候補。
+ *
+ * タブ ID とページ URL は送信元（`sender`）から Background 側で補うため
+ * ここには含めない。Content Script から送られた値は信用しない。
+ */
+export type MediaElementCandidate = {
+	sourceUrl: string;
+	detectedBy: 'video-element' | 'audio-element';
+	duration?: number;
+	width?: number;
+	height?: number;
+	title?: string;
+};
+
 export type DetectedMedia = {
 	id: string;
 

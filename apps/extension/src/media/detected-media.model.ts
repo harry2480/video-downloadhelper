@@ -1,5 +1,6 @@
 import type { DetectedMedia, DetectionSource, MediaType } from '../shared/types';
 import { type Result, err, ok } from '../shared/utils';
+import { isBlockedUrl } from './blocklist';
 import { detectMediaType, isBlobUrl, isFetchableUrl, isSupportedMediaType } from './media-type';
 import { toDedupeKey } from './url';
 
@@ -7,7 +8,8 @@ export type DetectionRejection =
 	| { type: 'blob-url' }
 	| { type: 'not-fetchable' }
 	| { type: 'unsupported-format' }
-	| { type: 'invalid-url' };
+	| { type: 'invalid-url' }
+	| { type: 'blocked-site' };
 
 export type DetectionInput = {
 	tabId: number;
@@ -34,10 +36,19 @@ export type DetectionInput = {
  * - `blob:` URL は保存対象にしない
  * - 拡張機能から再取得できないスキームは対象にしない
  * - 形式が判定できないものは一覧に出さない
+ * - ブロックリスト対象は取り込まない
+ *
+ * **ブロックリストの判定をここへ置くのが要。** 検出経路は複数あり
+ * （webRequest / Content Script）、経路ごとに判定を書くと必ず漏れる。
+ * ページ URL だけでなくメディア URL 自体も見る。ブロック対象サイトの
+ * 動画が別サイトへ埋め込まれている場合、ページ URL は素通りするため。
  */
 export function createDetectedMedia(
 	input: DetectionInput,
 ): Result<DetectedMedia, DetectionRejection> {
+	if (isBlockedUrl(input.pageUrl) || isBlockedUrl(input.sourceUrl)) {
+		return err({ type: 'blocked-site' });
+	}
 	if (isBlobUrl(input.sourceUrl)) return err({ type: 'blob-url' });
 	if (!isFetchableUrl(input.sourceUrl)) return err({ type: 'not-fetchable' });
 
