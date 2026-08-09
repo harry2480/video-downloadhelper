@@ -1,6 +1,7 @@
 import { createDetectedMediaRepository } from '../shared/storage/detected-media.repository';
 import { updateBadge } from './badge';
 import { MediaRegistry } from './media-registry';
+import { registerMessageHandler } from './message-handler';
 import { registerRequestDetector } from './request-detector';
 import { registerTabLifecycle } from './tab-manager';
 
@@ -23,10 +24,4 @@ const registry = new MediaRegistry(repository, (tabId, media) => {
 
 registerRequestDetector(registry);
 registerTabLifecycle(registry);
-
-// 拡張機能内部メッセージは必ず送信元を検証する。
-// 外部ページから任意の処理を呼び出せないようにするための最初の防壁。
-chrome.runtime.onMessage.addListener((_message, sender) => {
-	if (sender.id !== chrome.runtime.id) return false;
-	return false;
-});
+registerMessageHandler(registry);

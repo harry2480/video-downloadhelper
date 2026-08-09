@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<title>blob URL を再生するページ</title>
+	</head>
+	<body>
+		<h1>blob URL</h1>
+		<p>MSE を使うサイトの &lt;video src&gt; と同じ形。保存対象にしてはいけない。</p>
+		<video id="player" preload="none"></video>
+		<script>
+			// ネットワークリクエストを伴わない blob URL を作る。
+			// DOM 検出がこれを候補にすると、取得できない URL が一覧に並ぶ
+			const blob = new Blob([new Uint8Array([0, 1, 2, 3])], { type: 'video/mp4' });
+			document.getElementById('player').src = URL.createObjectURL(blob);
+		</script>
+	</body>
+</html>

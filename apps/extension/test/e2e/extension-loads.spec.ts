@@ -74,17 +74,27 @@ test('ポップアップが要件どおりの幅で描画される', async () =>
 	await page.close();
 });
 
-test('Content Script が通常のページへ注入される', async () => {
+test('Content Script の検出がバッジまで届く', async () => {
+	// manifest による注入 → DOM 検出 → メッセージ → Background → バッジ という
+	// 経路を通しで確認する。preload="none" のためネットワーク検出は働かず、
+	// Content Script が動いていなければバッジは出ない。
 	const page = await extension.context.newPage();
+	await page.goto(`${server.origin}/media-dom-only.html`);
 
-	// data: URL には注入されないため、ローカルの http ページを使う
-	const injected = page.waitForEvent('console', {
-		predicate: (message) => message.text().includes('[vdh] content script injected'),
-		timeout: 15_000,
+	const worker = extension.context.serviceWorkers()[0];
+	expect(worker).toBeDefined();
+
+	const tabId = await worker?.evaluate(async () => {
+		const [tab] = await chrome.tabs.query({ url: '*://*/media-dom-only.html' });
+		return tab?.id ?? -1;
 	});
+	expect(tabId).toBeGreaterThanOrEqual(0);
 
-	await page.goto(`${server.origin}/basic.html`);
-	await expect(injected).resolves.toBeTruthy();
+	await expect
+		.poll(() => worker?.evaluate((id) => chrome.action.getBadgeText({ tabId: id }), tabId), {
+			timeout: 15_000,
+		})
+		.toBe('1');
 
 	await page.close();
 });

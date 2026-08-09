@@ -1,0 +1,131 @@
+import { describe, expect, it } from 'vitest';
+import { parseContentMessage } from './messages';
+
+/**
+ * Content Script はページと同じプロセスで動くため、送られてくる値は
+ * 改ざんされ得る。ここは信用境界であり、異常系こそが本体。
+ */
+
+function message(candidates: unknown[]): unknown {
+	return { kind: 'media-elements-detected', candidates };
+}
+
+const VALID = {
+	sourceUrl: 'https://cdn.example.com/v.mp4',
+	detectedBy: 'video-element',
+};
+
+describe('parseContentMessage', () => {
+	it('正しいメッセージを通す', () => {
+		expect(parseContentMessage(message([VALID]))).toEqual({
+			kind: 'media-elements-detected',
+			candidates: [VALID],
+		});
+	});
+
+	it('任意項目を引き継ぐ', () => {
+		const parsed = parseContentMessage(
+			message([{ ...VALID, duration: 120, width: 1920, height: 1080, title: 'タイトル' }]),
+		);
+
+		expect(parsed?.candidates[0]).toEqual({
+			...VALID,
+			duration: 120,
+			width: 1920,
+			height: 1080,
+			title: 'タイトル',
+		});
+	});
+
+	describe('メッセージ全体の検証', () => {
+		it.each([undefined, null, 0, 'text', [], true])('%s を破棄する', (raw) => {
+			expect(parseContentMessage(raw)).toBeUndefined();
+		});
+
+		it('kind が違うものを破棄する', () => {
+			expect(parseContentMessage({ kind: 'other', candidates: [VALID] })).toBeUndefined();
+		});
+
+		it('candidates が配列でないものを破棄する', () => {
+			expect(
+				parseContentMessage({ kind: 'media-elements-detected', candidates: {} }),
+			).toBeUndefined();
+		});
+
+		it('有効な候補が 1 件もなければ破棄する', () => {
+			expect(parseContentMessage(message([]))).toBeUndefined();
+			expect(parseContentMessage(message([{ sourceUrl: 123 }]))).toBeUndefined();
+		});
+	});
+
+	describe('候補ごとの検証', () => {
+		it('不正な候補だけを落として残りを通す', () => {
+			const parsed = parseContentMessage(
+				message([{ sourceUrl: 123 }, VALID, null, { detectedBy: 'video-element' }]),
+			);
+
+			expect(parsed?.candidates).toEqual([VALID]);
+		});
+
+		it('detectedBy を列挙値に限定する', () => {
+			expect(parseContentMessage(message([{ ...VALID, detectedBy: 'network' }]))).toBeUndefined();
+			expect(parseContentMessage(message([{ ...VALID, detectedBy: '__proto__' }]))).toBeUndefined();
+		});
+
+		it('空の sourceUrl を破棄する', () => {
+			expect(parseContentMessage(message([{ ...VALID, sourceUrl: '' }]))).toBeUndefined();
+		});
+
+		it('長すぎる sourceUrl を破棄する', () => {
+			const parsed = parseContentMessage(
+				message([{ ...VALID, sourceUrl: `https://a.example.com/${'x'.repeat(5_000)}` }]),
+			);
+			expect(parsed).toBeUndefined();
+		});
+
+		it('数値でない duration / width / height を落とす', () => {
+			const parsed = parseContentMessage(
+				message([{ ...VALID, duration: '120', width: null, height: {} }]),
+			);
+
+			expect(parsed?.candidates[0]).toEqual(VALID);
+		});
+
+		it('NaN / Infinity / 0 以下を落とす', () => {
+			const parsed = parseContentMessage(
+				message([{ ...VALID, duration: Number.NaN, width: Number.POSITIVE_INFINITY, height: -1 }]),
+			);
+
+			expect(parsed?.candidates[0]).toEqual(VALID);
+		});
+
+		it('文字列でない title を落とす', () => {
+			const parsed = parseContentMessage(message([{ ...VALID, title: { toString: 'evil' } }]));
+
+			expect(parsed?.candidates[0]).toEqual(VALID);
+		});
+
+		it('長すぎる title を切り詰める', () => {
+			const parsed = parseContentMessage(message([{ ...VALID, title: 'あ'.repeat(1_000) }]));
+
+			expect(parsed?.candidates[0]?.title).toHaveLength(200);
+		});
+
+		it('想定外のキーを取り込まない', () => {
+			const parsed = parseContentMessage(
+				message([{ ...VALID, tabId: 999, detectedAt: 1, evil: 'x' }]),
+			);
+
+			expect(parsed?.candidates[0]).toEqual(VALID);
+		});
+	});
+
+	it('候補数に上限を設ける', () => {
+		const many = Array.from({ length: 500 }, (_, index) => ({
+			...VALID,
+			sourceUrl: `https://cdn.example.com/${index}.mp4`,
+		}));
+
+		expect(parseContentMessage(message(many))?.candidates).toHaveLength(50);
+	});
+});

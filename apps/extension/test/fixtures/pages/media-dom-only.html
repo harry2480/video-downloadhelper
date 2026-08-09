@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<title>DOM 検出のみで拾えるページ</title>
+	</head>
+	<body>
+		<h1>preload=none の video</h1>
+		<!--
+			preload="none" のためネットワークリクエストが発生しない。
+			DOM 検出が動いていなければ何も検出されない。
+		-->
+		<video src="dom-only.mp4" preload="none" title="DOM だけで見つかる動画"></video>
+	</body>
+</html>

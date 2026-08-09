@@ -1,0 +1,76 @@
+import type { MediaElementCandidate } from './types';
+
+/**
+ * コンテキスト間通信の単一の窓口。
+ *
+ * 実行コンテキストは別バンドルであり直接 import できない。
+ * やり取りはすべてここで定義した判別可能ユニオンを経由する。
+ *
+ * **受信側は必ずパースしてから使うこと。** Content Script はページと同じ
+ * プロセスで動くため、その内容を信用してはならない（要件定義 12 章）。
+ */
+
+export type ContentToBackground = {
+	kind: 'media-elements-detected';
+	candidates: MediaElementCandidate[];
+};
+
+/** 1 メッセージで受け付ける候補数の上限。異常なページからの大量送信を防ぐ。 */
+const MAX_CANDIDATES = 50;
+const MAX_URL_LENGTH = 4_096;
+const MAX_TITLE_LENGTH = 200;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseOptionalPositiveNumber(value: unknown): number | undefined {
+	if (typeof value !== 'number') return undefined;
+	if (!Number.isFinite(value) || value <= 0) return undefined;
+	return value;
+}
+
+function parseCandidate(value: unknown): MediaElementCandidate | undefined {
+	if (!isRecord(value)) return undefined;
+
+	const { sourceUrl, detectedBy, title } = value;
+
+	if (typeof sourceUrl !== 'string') return undefined;
+	if (sourceUrl.length === 0 || sourceUrl.length > MAX_URL_LENGTH) return undefined;
+	if (detectedBy !== 'video-element' && detectedBy !== 'audio-element') return undefined;
+
+	const duration = parseOptionalPositiveNumber(value.duration);
+	const width = parseOptionalPositiveNumber(value.width);
+	const height = parseOptionalPositiveNumber(value.height);
+
+	return {
+		sourceUrl,
+		detectedBy,
+		...(duration !== undefined && { duration }),
+		...(width !== undefined && { width }),
+		...(height !== undefined && { height }),
+		...(typeof title === 'string' &&
+			title.length > 0 && { title: title.slice(0, MAX_TITLE_LENGTH) }),
+	};
+}
+
+/**
+ * Content Script から届いたメッセージを検証する。
+ *
+ * 形が合わないものは `undefined` を返して破棄する。
+ * 一部の候補だけが不正な場合は、その候補のみ落として残りを通す。
+ */
+export function parseContentMessage(raw: unknown): ContentToBackground | undefined {
+	if (!isRecord(raw)) return undefined;
+	if (raw.kind !== 'media-elements-detected') return undefined;
+	if (!Array.isArray(raw.candidates)) return undefined;
+
+	const candidates = raw.candidates
+		.slice(0, MAX_CANDIDATES)
+		.map(parseCandidate)
+		.filter((candidate): candidate is MediaElementCandidate => candidate !== undefined);
+
+	if (candidates.length === 0) return undefined;
+
+	return { kind: 'media-elements-detected', candidates };
+}
