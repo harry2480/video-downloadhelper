@@ -30,6 +30,6 @@
 		}
 	},
 	"files": {
-		"ignore": ["node_modules", "dist", "coverage", "playwright-report", ".claude"]
+		"ignore": ["node_modules", "dist", "coverage", "playwright-report", "test-results", ".claude"]
 	}
 }

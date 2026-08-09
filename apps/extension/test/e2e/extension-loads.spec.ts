@@ -68,21 +68,66 @@ test('Content Script が通常のページへ注入される', async () => {
 	await page.close();
 });
 
-test('拡張機能が外部ホストへリクエストしない', async () => {
-	const page = await extension.context.newPage();
-	const externalRequests: string[] = [];
+/**
+ * 外部ホストへのリクエストを収集する。
+ *
+ * **Page ではなく BrowserContext で監視すること。** Service Worker が送る
+ * リクエストは page.on('request') には一切現れない。外部送信を最も起こしやすい
+ * のが Service Worker なので、Page 単位で監視するとこの検証は素通りする。
+ */
+function collectExternalRequests(
+	context: ExtensionContext['context'],
+	allowedOrigin: string,
+): { urls: string[]; stop: () => void } {
+	const urls: string[] = [];
 
-	page.on('request', (request) => {
+	const onRequest = (request: { url: () => string }) => {
 		const url = request.url();
-		if (/^https?:\/\//.test(url)) externalRequests.push(url);
-	});
+		if (!/^https?:\/\//.test(url)) return;
+		// ローカルのフィクスチャ配信は外部送信ではない
+		if (url.startsWith(allowedOrigin)) return;
+		urls.push(url);
+	};
+
+	context.on('request', onRequest);
+	return { urls, stop: () => context.off('request', onRequest) };
+}
+
+test('拡張機能が外部ホストへリクエストしない', async () => {
+	const collected = collectExternalRequests(extension.context, server.origin);
+	const page = await extension.context.newPage();
 
 	await page.goto(popupUrl(extension.extensionId));
+	// Content Script も動かしたうえで観測する
+	await page.goto(`${server.origin}/basic.html`);
 	await page.waitForTimeout(1_000);
+
+	collected.stop();
 
 	// プライバシー要件の機械的検証（要件定義 12 章）。
 	// 画像・フォント・スクリプトはすべて同梱し、外部へ出ないこと
-	expect(externalRequests).toEqual([]);
+	expect(collected.urls).toEqual([]);
 
 	await page.close();
+});
+
+test('外部リクエストの検出機構が Service Worker の通信を捕捉する', async () => {
+	// 上のテストが「監視できていないから空」で通る状態に退行していないことを保証する。
+	// page.on('request') に戻すとこのテストが落ちる。
+	const collected = collectExternalRequests(extension.context, server.origin);
+
+	const worker = extension.context.serviceWorkers()[0];
+	expect(worker).toBeDefined();
+
+	await worker?.evaluate(async () => {
+		try {
+			await fetch('https://detector-selftest.invalid/beacon');
+		} catch {
+			// 名前解決に失敗してよい。リクエストが発生した事実を観測できればよい
+		}
+	});
+
+	collected.stop();
+
+	expect(collected.urls).toContain('https://detector-selftest.invalid/beacon');
 });
