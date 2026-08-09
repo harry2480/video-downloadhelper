@@ -2,6 +2,7 @@ import { createDetectedMediaRepository } from '../shared/storage/detected-media.
 import { updateBadge } from './badge';
 import { MediaRegistry } from './media-registry';
 import { registerMessageHandler } from './message-handler';
+import { broadcastToPopups, registerPopupPort } from './popup-port';
 import { registerRequestDetector } from './request-detector';
 import { registerTabLifecycle } from './tab-manager';
 
@@ -20,8 +21,10 @@ const repository = createDetectedMediaRepository();
 
 const registry = new MediaRegistry(repository, (tabId, media) => {
 	void updateBadge(tabId, media.length);
+	broadcastToPopups(tabId, media);
 });
 
 registerRequestDetector(registry);
 registerTabLifecycle(registry);
 registerMessageHandler(registry);
+registerPopupPort(registry);

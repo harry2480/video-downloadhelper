@@ -7,7 +7,10 @@ export default defineConfig({
 		// コアロジック層に加えて、実行コンテキスト層のうち chrome.* に触れない
 		// オーケストレーター（MediaRegistry 等）も対象にする。
 		// chrome.* に依存するコードはここでは動かない（モックで通そうとしないこと）。
-		include: ['src/**/*.test.ts'],
+		include: ['src/**/*.test.{ts,tsx}'],
+		// jsdom が必要なテストは各ファイルの先頭で
+		// `/** @vitest-environment jsdom */` を宣言する
+		setupFiles: ['./test/setup-dom.ts'],
 		passWithNoTests: true,
 		coverage: {
 			provider: 'v8',
