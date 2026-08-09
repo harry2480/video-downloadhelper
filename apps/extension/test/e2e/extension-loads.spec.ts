@@ -29,6 +29,27 @@ test('Service Worker が起動する', async () => {
 	expect(extension.extensionId).toMatch(/^[a-p]{32}$/);
 });
 
+test('Service Worker が background のバンドルを実行している', async () => {
+	// エントリのファイル名が重複していると、CRXJS が
+	// service-worker-loader.js を別のバンドル（content script 等）へ
+	// 紐づけてしまう。SW は起動するが中身が別物、という形で静かに壊れる。
+	// リスナーの登録有無で「正しいコードが動いているか」を直接確かめる。
+	const worker = extension.context.serviceWorkers()[0];
+	expect(worker).toBeDefined();
+
+	const listeners = await worker?.evaluate(() => ({
+		headersReceived: chrome.webRequest.onHeadersReceived.hasListeners(),
+		beforeRequest: chrome.webRequest.onBeforeRequest.hasListeners(),
+		tabRemoved: chrome.tabs.onRemoved.hasListeners(),
+	}));
+
+	expect(listeners).toEqual({
+		headersReceived: true,
+		beforeRequest: true,
+		tabRemoved: true,
+	});
+});
+
 test('ポップアップが表示される', async () => {
 	const page = await extension.context.newPage();
 	await page.goto(popupUrl(extension.extensionId));

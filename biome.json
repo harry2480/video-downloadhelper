@@ -21,6 +21,35 @@
 					}
 				}
 			}
+		},
+		{
+			"include": [
+				"apps/extension/src/shared/**",
+				"apps/extension/src/media/**",
+				"apps/extension/src/processor/**"
+			],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedGlobals": {
+							"level": "error",
+							"options": {
+								"deniedGlobals": ["chrome", "document", "window", "localStorage", "Blob"]
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"include": ["apps/extension/src/shared/storage/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedGlobals": "off"
+					}
+				}
+			}
 		}
 	],
 	"javascript": {

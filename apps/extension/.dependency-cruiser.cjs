@@ -37,6 +37,13 @@ module.exports = {
 			to: { path: '^src/processor/' },
 		},
 		{
+			name: 'core-no-storage',
+			severity: 'error',
+			comment: 'shared/storage は chrome.storage を直接呼ぶ例外層。コアロジック層へ波及させない',
+			from: { path: '^src/(media|processor)/' },
+			to: { path: '^src/shared/storage/' },
+		},
+		{
 			name: 'no-circular',
 			severity: 'error',
 			comment: '循環依存を禁止する',

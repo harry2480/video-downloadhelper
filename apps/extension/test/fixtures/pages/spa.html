@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<title>SPA 内遷移のテストページ</title>
+	</head>
+	<body>
+		<h1>SPA</h1>
+		<button type="button" id="load-media">メディアを読み込む</button>
+		<button type="button" id="spa-navigate">SPA 内遷移（History API）</button>
+		<div id="container"></div>
+		<script>
+			document.getElementById('load-media').addEventListener('click', () => {
+				const video = document.createElement('video');
+				video.src = 'sample.mp4';
+				video.preload = 'auto';
+				document.getElementById('container').appendChild(video);
+			});
+
+			// main_frame リクエストを発生させない遷移。
+			// 検出結果が維持されることの確認に使う
+			document.getElementById('spa-navigate').addEventListener('click', () => {
+				history.pushState({}, '', '/spa.html?view=detail');
+			});
+		</script>
+	</body>
+</html>

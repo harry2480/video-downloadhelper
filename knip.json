@@ -3,9 +3,9 @@
 	"workspaces": {
 		"apps/extension": {
 			"entry": [
-				"src/background/index.ts",
-				"src/content/index.ts",
-				"src/offscreen/index.ts",
+				"src/background/service-worker.ts",
+				"src/content/content-script.ts",
+				"src/offscreen/offscreen.ts",
 				"src/popup/main.tsx",
 				"scripts/*.mjs"
 			],
