@@ -109,6 +109,21 @@ export function formatUrlForDisplay(url: string): string {
 	return maskSensitiveParams(url);
 }
 
+/** DRM 判定だけがあって理由文言がない場合の既定文言（要件定義 4.5）。 */
+const DRM_MESSAGE = 'この動画は DRM で保護されているため対応していません';
+
+/**
+ * 保存できない理由。無ければ undefined。
+ *
+ * 解析で理由が付いていればそれを使い、DRM 判定だけがある場合は既定文言を出す。
+ * 「対応外なのに理由が出ない」状態を作らないための組み立て（要件定義 2.1）。
+ */
+export function formatUnsupportedReason(media: DetectedMedia): string | undefined {
+	if (media.unsupportedReason !== undefined) return media.unsupportedReason;
+	if (media.drm === true) return DRM_MESSAGE;
+	return undefined;
+}
+
 /**
  * 一覧に並べる副題。解像度・ビットレート・再生時間・サイズを 1 行にまとめる。
  * 値が揃わないことが普通なので、取れたものだけを並べる。

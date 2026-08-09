@@ -1,4 +1,4 @@
-import type { DetectedMedia, DetectionSource, MediaType } from '../shared/types';
+import type { DetectedMedia, DetectionSource, MediaType, MediaVariant } from '../shared/types';
 import { type Result, err, ok } from '../shared/utils';
 import { isBlockedUrl } from './blocklist';
 import { detectMediaType, isBlobUrl, isFetchableUrl, isSupportedMediaType } from './media-type';
@@ -80,6 +80,34 @@ export function createDetectedMedia(
 		...(input.drm !== undefined && { drm: input.drm }),
 		detectedAt: input.detectedAt,
 	});
+}
+
+/**
+ * マニフェスト解析の結果を反映する。
+ *
+ * 解析済みであることを `manifestResolved` で示す。未解析と
+ * 「解析したが品質が 1 つしかない」を区別するために必要。
+ */
+export function applyManifestAnalysis(
+	media: DetectedMedia,
+	analysis: {
+		variants?: MediaVariant[];
+		drm?: boolean;
+		duration?: number;
+		unsupportedReason?: string;
+	},
+): DetectedMedia {
+	return {
+		...media,
+		manifestResolved: true,
+		...(analysis.variants !== undefined && { variants: analysis.variants }),
+		// DRM は安全側へ倒す。一度 true になったら戻さない
+		...((analysis.drm === true || media.drm === true) && { drm: true }),
+		...(analysis.duration !== undefined && { duration: analysis.duration }),
+		...(analysis.unsupportedReason !== undefined && {
+			unsupportedReason: analysis.unsupportedReason,
+		}),
+	};
 }
 
 /** 検出方式の優先度。大きいほど信頼できる情報とみなす。 */

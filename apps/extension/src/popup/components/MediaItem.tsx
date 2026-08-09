@@ -4,9 +4,11 @@ import {
 	formatMediaType,
 	formatSummary,
 	formatTitle,
+	formatUnsupportedReason,
 	formatUrlForDisplay,
 } from '../../media/format';
 import type { DetectedMedia } from '../../shared/types';
+import { QualitySelector } from './QualitySelector';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 
@@ -20,9 +22,15 @@ export function MediaItem({ media }: { media: DetectedMedia }) {
 	const [isDetailOpen, setIsDetailOpen] = useState(false);
 	const detailId = useId();
 
+	const variants = media.variants ?? [];
+	// 既定で最高品質を選ぶ。variants は解析時に高画質順へ並べてある
+	const [selectedVariantId, setSelectedVariantId] = useState<string | undefined>(undefined);
+	const effectiveVariantId = selectedVariantId ?? variants[0]?.id;
+
 	const title = formatTitle(media);
 	const host = formatHost(media.sourceUrl);
 	const summary = formatSummary(media);
+	const unsupportedReason = formatUnsupportedReason(media);
 
 	return (
 		<li className="border-border border-b px-4 py-3 last:border-b-0">
@@ -37,8 +45,20 @@ export function MediaItem({ media }: { media: DetectedMedia }) {
 				{host !== undefined && <span className="truncate text-muted text-xs">{host}</span>}
 				{summary.length > 0 && <span className="text-muted text-xs">{summary}</span>}
 
-				{media.drm === true && (
-					<p className="text-danger text-xs">この動画は DRM で保護されているため対応していません</p>
+				{unsupportedReason !== undefined && (
+					<p className="text-danger text-xs">{unsupportedReason}</p>
+				)}
+
+				{media.type === 'hls' && media.manifestResolved !== true && (
+					<p className="text-muted text-xs">画質を確認しています…</p>
+				)}
+
+				{variants.length > 1 && effectiveVariantId !== undefined && (
+					<QualitySelector
+						variants={variants}
+						selectedId={effectiveVariantId}
+						onSelect={setSelectedVariantId}
+					/>
 				)}
 
 				<div className="mt-1 flex gap-2">

@@ -3,6 +3,7 @@ import type { DetectedMedia } from '../shared/types';
 import {
 	type DetectionInput,
 	type DetectionRejection,
+	applyManifestAnalysis,
 	createDetectedMedia,
 	mergeDetectedMedia,
 	upsertDetectedMedia,
@@ -147,6 +148,49 @@ describe('createDetectedMedia', () => {
 			});
 			expect(result).toEqual({ ok: false, error: { type: 'invalid-url' } });
 		});
+	});
+});
+
+describe('applyManifestAnalysis', () => {
+	it('解析済みであることを記録する', () => {
+		// 未解析と「解析したが品質が 1 つ」を区別するために必要
+		expect(applyManifestAnalysis(create(), {}).manifestResolved).toBe(true);
+	});
+
+	it('品質一覧・再生時間・対応外の理由を反映する', () => {
+		const applied = applyManifestAnalysis(create(), {
+			variants: [{ id: 'v0', url: 'https://cdn.example.com/1080.m3u8', height: 1080 }],
+			duration: 600,
+			unsupportedReason: 'fMP4 セグメントの HLS には未対応です',
+		});
+
+		expect(applied.variants).toHaveLength(1);
+		expect(applied.duration).toBe(600);
+		expect(applied.unsupportedReason).toContain('fMP4');
+	});
+
+	it('DRM は一度 true になったら戻さない', () => {
+		const drmMedia = create({ drm: true });
+
+		expect(applyManifestAnalysis(drmMedia, {}).drm).toBe(true);
+		expect(applyManifestAnalysis(drmMedia, { drm: false }).drm).toBe(true);
+	});
+
+	it('解析で DRM と判明したら true にする', () => {
+		expect(applyManifestAnalysis(create(), { drm: true }).drm).toBe(true);
+	});
+
+	it('指定のない項目を消さない', () => {
+		const withTitle = create({ title: '動画タイトル' });
+
+		expect(applyManifestAnalysis(withTitle, {}).title).toBe('動画タイトル');
+	});
+
+	it('元のオブジェクトを変更しない', () => {
+		const original = create();
+		applyManifestAnalysis(original, { duration: 600 });
+
+		expect(original).not.toHaveProperty('manifestResolved');
 	});
 });
 

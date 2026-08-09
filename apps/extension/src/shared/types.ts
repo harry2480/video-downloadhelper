@@ -91,6 +91,15 @@ export type DetectedMedia = {
 	/** DRM 保護の候補と判定されたか。true の場合ダウンロード操作を提供しない */
 	drm?: boolean;
 
+	/**
+	 * 保存できない場合の理由（要件定義 2.1 の対応外通知）。
+	 * fMP4 セグメントの HLS、マニフェストの再フェッチ失敗など。
+	 */
+	unsupportedReason?: string;
+
+	/** マニフェストを解析済みか。未解析と「解析したが品質が 1 つ」を区別する */
+	manifestResolved?: boolean;
+
 	variants?: MediaVariant[];
 
 	/** 検出時刻（epoch ms）。一覧の並び順に使う */
