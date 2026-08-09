@@ -1,8 +1,9 @@
 name: Verify
 
 on:
+  # スタックPR（ベースが main 以外）でも必ず検証する。
+  # branches を main に絞ると、フィーチャーブランチ宛のPRが素通りする。
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
