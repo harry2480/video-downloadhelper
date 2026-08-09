@@ -7,9 +7,10 @@
 				"src/content/index.ts",
 				"src/offscreen/index.ts",
 				"src/popup/main.tsx",
-				"test/**/*.{test,spec}.{ts,tsx}"
+				"scripts/*.mjs"
 			],
-			"project": "src/**/*.{ts,tsx}"
+			"project": "src/**/*.{ts,tsx}",
+			"ignoreDependencies": ["tailwindcss"]
 		}
 	}
 }

@@ -1,0 +1,36 @@
+{
+	"name": "extension",
+	"private": true,
+	"type": "module",
+	"version": "0.1.0",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"package": "node scripts/package.mjs",
+		"typecheck": "tsc --noEmit",
+		"test:unit": "vitest run",
+		"test:coverage": "vitest run --coverage",
+		"test:integration": "vitest run --config vitest.integration.config.ts",
+		"test:e2e": "playwright test",
+		"depcruise": "depcruise src --config .dependency-cruiser.cjs"
+	},
+	"dependencies": {
+		"react": "^19.2.0",
+		"react-dom": "^19.2.0"
+	},
+	"devDependencies": {
+		"@crxjs/vite-plugin": "^2.7.1",
+		"@playwright/test": "^1.57.0",
+		"@tailwindcss/vite": "^4.3.3",
+		"@types/chrome": "^0.1.30",
+		"@types/react": "^19.2.0",
+		"@types/react-dom": "^19.2.0",
+		"@vitejs/plugin-react": "^5.1.0",
+		"@vitest/coverage-v8": "^4.1.10",
+		"dependency-cruiser": "^17.0.1",
+		"tailwindcss": "^4.3.3",
+		"typescript": "^5.9.3",
+		"vite": "^8.2.1",
+		"vitest": "^4.1.10"
+	}
+}

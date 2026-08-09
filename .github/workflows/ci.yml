@@ -40,7 +40,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Playwright ブラウザをインストール
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm --filter extension exec playwright install --with-deps chromium
 
       # 拡張機能のロードにはビルド済みの dist/ が必要
       - name: 拡張機能をビルド
