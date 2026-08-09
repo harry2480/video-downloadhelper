@@ -27,11 +27,6 @@ const VOLATILE_QUERY_PARAMS = new Set([
 	'timestamp',
 ]);
 
-const DEFAULT_PORTS: Record<string, string> = {
-	'http:': '80',
-	'https:': '443',
-};
-
 /**
  * マニフェスト内の相対 URL を絶対 URL へ解決する。
  *
@@ -49,10 +44,12 @@ export function resolveUrl(url: string, baseUrl: string): Result<string, UrlErro
 /**
  * 重複判定用の正規化キーを作る。
  *
- * - scheme / host を小文字化し、デフォルトポートを除去する
  * - フラグメントを除去する
  * - 揮発的なクエリパラメータを除去する
  * - 残ったクエリパラメータをキー順にソートする（順序違いを同一とみなすため）
+ *
+ * scheme / host の小文字化とデフォルトポート（80 / 443）の除去は
+ * URL API が自動で行うため、ここでは何もしない。
  *
  * 認証トークン等のクエリは **残す**。異なるトークンで同じ実体を指す場合も
  * あるが、落とすと本来別物のストリームまで同一視してしまうため。
@@ -66,10 +63,6 @@ export function toDedupeKey(url: string): Result<string, UrlError> {
 	}
 
 	parsed.hash = '';
-
-	if (DEFAULT_PORTS[parsed.protocol] === parsed.port) {
-		parsed.port = '';
-	}
 
 	const kept: [string, string][] = [];
 	for (const [key, value] of parsed.searchParams) {

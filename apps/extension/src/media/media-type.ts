@@ -58,8 +58,9 @@ const EXTENSION_TO_TYPE: Record<string, MediaType> = {
  * 小文字の MIME タイプだけを取り出す。
  */
 export function normalizeMimeType(contentType: string): string {
-	const [mime] = contentType.split(';');
-	return (mime ?? '').trim().toLowerCase();
+	const separatorIndex = contentType.indexOf(';');
+	const mime = separatorIndex === -1 ? contentType : contentType.slice(0, separatorIndex);
+	return mime.trim().toLowerCase();
 }
 
 /**

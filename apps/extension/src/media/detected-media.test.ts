@@ -58,6 +58,30 @@ describe('createDetectedMedia', () => {
 		expect('pageTitle' in media).toBe(false);
 	});
 
+	it('指定された任意項目をすべて引き継ぐ', () => {
+		const media = create({
+			contentType: 'application/x-mpegURL',
+			title: '動画タイトル',
+			duration: 3600,
+			width: 1920,
+			height: 1080,
+			bitrate: 5_200_000,
+			estimatedSize: 420_000_000,
+			drm: false,
+		});
+
+		expect(media).toMatchObject({
+			mimeType: 'application/x-mpegURL',
+			title: '動画タイトル',
+			duration: 3600,
+			width: 1920,
+			height: 1080,
+			bitrate: 5_200_000,
+			estimatedSize: 420_000_000,
+			drm: false,
+		});
+	});
+
 	describe('拒否するケース', () => {
 		it('拒否理由を網羅している', () => {
 			// DetectionRejection に理由を足したらここも更新すること。
@@ -91,6 +115,17 @@ describe('createDetectedMedia', () => {
 				contentType: 'text/html',
 			});
 			expect(result).toEqual({ ok: false, error: { type: 'unsupported-format' } });
+		});
+
+		it('スキームは http でも URL として壊れているものを拒否する', () => {
+			// http:// で始まるため isFetchableUrl は通り、Content-Type から形式も
+			// 判定できるが、URL としてはパースできず重複判定キーを作れない
+			const result = createDetectedMedia({
+				...BASE,
+				sourceUrl: 'http://[invalid/v.mp4',
+				contentType: 'video/mp4',
+			});
+			expect(result).toEqual({ ok: false, error: { type: 'invalid-url' } });
 		});
 	});
 });

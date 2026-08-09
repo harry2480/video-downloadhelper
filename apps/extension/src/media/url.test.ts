@@ -95,6 +95,13 @@ describe('toDedupeKey', () => {
 		expect(first).toBe(second);
 	});
 
+	it('同名パラメータは値でも安定した順序に並べる', () => {
+		const a = unwrap(toDedupeKey('https://a.example.com/v.m3u8?x=2&x=1'));
+		const b = unwrap(toDedupeKey('https://a.example.com/v.m3u8?x=1&x=2'));
+
+		expect(a).toBe(b);
+	});
+
 	it('認証トークンは残す（別ストリームを同一視しないため）', () => {
 		const a = unwrap(toDedupeKey('https://a.example.com/v.m3u8?token=aaa'));
 		const b = unwrap(toDedupeKey('https://a.example.com/v.m3u8?token=bbb'));
@@ -127,6 +134,11 @@ describe('getPathExtension', () => {
 
 	it('拡張子がなければ undefined を返す', () => {
 		expect(getPathExtension('https://a.example.com/stream')).toBeUndefined();
+	});
+
+	it('パスがディレクトリで終わる場合は undefined を返す', () => {
+		expect(getPathExtension('https://a.example.com/hls/')).toBeUndefined();
+		expect(getPathExtension('https://a.example.com')).toBeUndefined();
 	});
 
 	it('ドットで終わる場合は undefined を返す', () => {
