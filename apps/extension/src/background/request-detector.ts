@@ -88,8 +88,12 @@ async function handleResponse(
 	const pageInfo = await resolvePageInfo(details.tabId);
 	if (!pageInfo) return;
 
-	// ブロックリスト対象サイトでは検出そのものを行わない（要件定義 2.1）
+	// ブロックリスト対象サイトでは検出そのものを行わない（要件定義 2.1）。
+	// initiator はリクエストを発生させたフレームのオリジン。タブ URL だけを
+	// 見ると、ブロック対象サイトの埋め込みプレイヤーが素通りする。
+	// メディア URL 自体の判定は createDetectedMedia が行う
 	if (isBlockedUrl(pageInfo.pageUrl)) return;
+	if (details.initiator && isBlockedUrl(details.initiator)) return;
 
 	const contentType = findHeader(details.responseHeaders, 'content-type');
 	const contentLength = parseContentLength(findHeader(details.responseHeaders, 'content-length'));

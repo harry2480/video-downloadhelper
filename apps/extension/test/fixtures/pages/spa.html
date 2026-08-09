@@ -13,7 +13,10 @@
 			document.getElementById('load-media').addEventListener('click', () => {
 				const video = document.createElement('video');
 				video.src = 'sample.mp4';
-				video.preload = 'auto';
+				// preload="none" にしてネットワークリクエストを発生させない。
+				// auto のままだと MutationObserver を消してもネットワーク検出だけで
+				// テストが通ってしまい、DOM 監視を検証できない
+				video.preload = 'none';
 				document.getElementById('container').appendChild(video);
 			});
 

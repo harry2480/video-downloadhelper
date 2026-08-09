@@ -120,6 +120,9 @@ describe('DOM 検出', () => {
 		);
 
 		expect(stored?.[0]?.sourceUrl).toContain('sample.mp4');
+		// ネットワーク検出では拾えない経路であることを明示する。
+		// これがないと MutationObserver を消してもテストが通る
+		expect(stored?.[0]?.detectedBy).toBe('video-element');
 
 		await page.close();
 	});

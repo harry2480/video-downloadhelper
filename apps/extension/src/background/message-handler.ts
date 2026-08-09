@@ -24,8 +24,13 @@ export function registerMessageHandler(registry: MediaRegistry): void {
 		const pageUrl = sender.tab?.url ?? sender.url;
 		if (!pageUrl) return false;
 
-		// ブロックリスト対象サイトでは検出そのものを行わない（要件定義 2.1）
+		// ブロックリスト対象サイトでは検出そのものを行わない（要件定義 2.1）。
+		//
+		// **フレーム URL も見る。** manifest は all_frames: true なので
+		// Content Script はクロスオリジンの iframe 内でも動く。タブ URL だけを
+		// 見ると、ブロック対象サイトの埋め込みプレイヤーが素通りする。
 		if (isBlockedUrl(pageUrl)) return false;
+		if (sender.url && isBlockedUrl(sender.url)) return false;
 
 		const parsed = parseContentMessage(message);
 		if (!parsed) return false;

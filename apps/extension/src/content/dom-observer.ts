@@ -9,6 +9,15 @@
 /** 変更が落ち着くまで待つ時間。SPA の描画は連続して起きるためまとめる。 */
 const DEBOUNCE_MS = 300;
 
+/**
+ * デバウンスの最大待ち時間。
+ *
+ * 末尾デバウンスだけだと、変更が途切れないページで走査が永久に走らない。
+ * 広告のローテーションや遅延読み込みで `src` が絶えず書き換わるページが
+ * 実在するため、上限を超えたら必ず走らせる。
+ */
+const MAX_WAIT_MS = 2_000;
+
 const MEDIA_TAGS = new Set(['VIDEO', 'AUDIO', 'SOURCE']);
 
 function containsMediaElement(node: Node): boolean {
@@ -18,7 +27,12 @@ function containsMediaElement(node: Node): boolean {
 }
 
 function isRelevantMutation(mutation: MutationRecord): boolean {
-	if (mutation.type === 'attributes') return true;
+	if (mutation.type === 'attributes') {
+		// attributeFilter は文書全体に効く。<img src> の書き換え等で
+		// 走査してしまわないよう、対象がメディア要素かを確かめる
+		const target = mutation.target;
+		return target instanceof Element && MEDIA_TAGS.has(target.tagName);
+	}
 	return [...mutation.addedNodes].some(containsMediaElement);
 }
 
@@ -29,10 +43,27 @@ function isRelevantMutation(mutation: MutationRecord): boolean {
  */
 export function observeMediaElements(onChange: () => void): () => void {
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let firstScheduledAt: number | undefined;
+
+	const run = () => {
+		timer = undefined;
+		firstScheduledAt = undefined;
+		onChange();
+	};
 
 	const schedule = () => {
+		const now = Date.now();
+		firstScheduledAt ??= now;
+
+		// 待ち続けて走査されないことがないよう、上限を超えたら即実行する
+		if (now - firstScheduledAt >= MAX_WAIT_MS) {
+			if (timer !== undefined) clearTimeout(timer);
+			run();
+			return;
+		}
+
 		if (timer !== undefined) clearTimeout(timer);
-		timer = setTimeout(onChange, DEBOUNCE_MS);
+		timer = setTimeout(run, DEBOUNCE_MS);
 	};
 
 	const observer = new MutationObserver((mutations) => {

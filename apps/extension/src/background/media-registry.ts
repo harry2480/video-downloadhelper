@@ -14,6 +14,15 @@ import type { DetectedMedia } from '../shared/types';
  * Repository から復元できる形を保つ。インスタンス変数へ検出結果を
  * 溜め込まないこと。
  */
+/**
+ * 1 タブあたりに保持する検出結果の上限。
+ *
+ * DOM 検出は検出内容がページ側の操作で決まるため、上限がないと
+ * 際限なく増える。1 件追加ごとに配列全体の読み書きが走るため、
+ * 増えるほど遅くなり storage の容量も圧迫する（要件定義 2.7）。
+ */
+const MAX_MEDIA_PER_TAB = 200;
+
 export class MediaRegistry {
 	/**
 	 * タブごとの直列化キュー。
@@ -69,6 +78,11 @@ export class MediaRegistry {
 			if (generation !== this.currentGeneration(input.tabId)) return;
 
 			const current = await this.repository.findByTab(input.tabId);
+
+			// 既存の統合は上限に関わらず通す。新規追加のみ打ち切る
+			const isNew = !current.some((media) => media.dedupeKey === created.value.dedupeKey);
+			if (isNew && current.length >= MAX_MEDIA_PER_TAB) return;
+
 			const next = upsertDetectedMedia(current, created.value);
 
 			await this.repository.saveForTab(input.tabId, next);

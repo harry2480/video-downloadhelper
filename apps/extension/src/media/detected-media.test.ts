@@ -91,6 +91,7 @@ describe('createDetectedMedia', () => {
 				'not-fetchable',
 				'unsupported-format',
 				'invalid-url',
+				'blocked-site',
 			];
 			expect(new Set(reasons).size).toBe(reasons.length);
 		});
@@ -115,6 +116,25 @@ describe('createDetectedMedia', () => {
 				contentType: 'text/html',
 			});
 			expect(result).toEqual({ ok: false, error: { type: 'unsupported-format' } });
+		});
+
+		it('ブロックリスト対象ページを拒否する', () => {
+			const result = createDetectedMedia({
+				...BASE,
+				pageUrl: 'https://www.youtube.com/watch?v=abc',
+			});
+			expect(result).toEqual({ ok: false, error: { type: 'blocked-site' } });
+		});
+
+		it('ブロックリスト対象のメディア URL を拒否する', () => {
+			// 別サイトへ埋め込まれた場合、ページ URL はブロック対象にならない。
+			// メディア URL 自体を見ないと素通りする
+			const result = createDetectedMedia({
+				...BASE,
+				pageUrl: 'https://blog.example.com/article',
+				sourceUrl: 'https://r1---sn-abc.googlevideo.com/videoplayback.mp4',
+			});
+			expect(result).toEqual({ ok: false, error: { type: 'blocked-site' } });
 		});
 
 		it('スキームは http でも URL として壊れているものを拒否する', () => {

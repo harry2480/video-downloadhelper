@@ -8,12 +8,17 @@ import type { MediaElementSnapshot } from '../media/media-element';
  */
 
 function readLabel(element: HTMLMediaElement): string | null {
-	return (
-		element.getAttribute('title') ??
-		element.getAttribute('aria-label') ??
+	const candidates = [
+		element.getAttribute('title'),
+		element.getAttribute('aria-label'),
 		// <video> 直下の <track label> ではなく、囲む figure のキャプションを拾う
-		element.closest('figure')?.querySelector('figcaption')?.textContent ??
-		null
+		element.closest('figure')?.querySelector('figcaption')?.textContent,
+	];
+
+	// `??` で繋がないこと。getAttribute は未設定なら null だが
+	// `title=""` では空文字を返すため、後続の候補へ進まなくなる
+	return (
+		candidates.find((candidate): candidate is string => (candidate?.trim().length ?? 0) > 0) ?? null
 	);
 }
 
