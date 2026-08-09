@@ -2,9 +2,9 @@ name: Coverage
 
 on:
   push:
-    branches: [develop, main]
+    branches: [main]
   pull_request:
-    branches: [develop, main]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,8 +27,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm --filter webapp prisma generate
-
       - name: Unit テスト + カバレッジ計測
         run: pnpm test:coverage
 
@@ -36,6 +34,6 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: apps/webapp/coverage/lcov.info
+          files: apps/extension/coverage/lcov.info
           flags: unit
           fail_ci_if_error: false

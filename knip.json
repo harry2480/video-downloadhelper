@@ -1,10 +1,15 @@
 {
 	"$schema": "https://unpkg.com/knip@5/schema.json",
-	"ignoreDependencies": ["supabase", "vercel"],
 	"workspaces": {
-		"apps/webapp": {
-			"ignoreDependencies": ["postcss", "postcss-load-config"],
-			"ignore": ["src/frontend/components/ui/**"]
+		"apps/extension": {
+			"entry": [
+				"src/background/index.ts",
+				"src/content/index.ts",
+				"src/offscreen/index.ts",
+				"src/popup/main.tsx",
+				"test/**/*.{test,spec}.{ts,tsx}"
+			],
+			"project": "src/**/*.{ts,tsx}"
 		}
 	}
 }

@@ -17,13 +17,26 @@ description: 指定したPRの未解決レビューコメントに対応する
 
 2. **ブランチの切り替え**: PRのブランチが現在のブランチと異なる場合は、`gh pr checkout $ARGUMENTS` でPRのブランチに切り替える。
 
-3. **未解決レビューコメントの取得**: GraphQL APIを使用して、resolvedされていないレビュースレッドのみを取得する。
-   ```
-   gh api graphql -f query='query { repository(owner: "team-mirai", name: "marumie") { pullRequest(number: $ARGUMENTS) { reviewThreads(first: 100) { nodes { isResolved comments(first: 10) { nodes { id path line body author { login } } } } } } } }' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[]'
+3. **未解決レビューコメントの取得**: GraphQL APIを使用して、resolvedされていないレビュースレッドのみを取得する。リポジトリ名はハードコードせず `gh repo view` から取得する。
+   ```bash
+   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+   OWNER=${REPO%/*}
+   NAME=${REPO#*/}
+
+   gh api graphql -F owner="$OWNER" -F name="$NAME" -F number=$ARGUMENTS -f query='
+     query($owner: String!, $name: String!, $number: Int!) {
+       repository(owner: $owner, name: $name) {
+         pullRequest(number: $number) {
+           reviewThreads(first: 100) {
+             nodes { isResolved comments(first: 10) { nodes { id path line body author { login } } } }
+           }
+         }
+       }
+     }' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[]'
    ```
    また、PRレビュー自体のコメント（CHANGES_REQUESTED や COMMENTED）も取得する。
-   ```
-   gh api repos/team-mirai/marumie/pulls/$ARGUMENTS/reviews --jq '.[] | select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED") | {id: .id, body: .body, user: .user.login, state: .state}'
+   ```bash
+   gh api "repos/$REPO/pulls/$ARGUMENTS/reviews" --jq '.[] | select(.state == "CHANGES_REQUESTED" or .state == "COMMENTED") | {id: .id, body: .body, user: .user.login, state: .state}'
    ```
    **注意**: `isResolved == true` のスレッドは既に解決済みのため、対応不要として無視する。
 
@@ -33,7 +46,7 @@ description: 指定したPRの未解決レビューコメントに対応する
    - 設計に関するフィードバック
 
 5. **対応の実施**: 各レビューコメントに対して以下のいずれかを行う。
-   - **コード修正が必要な場合**: 指摘されたファイルを読み込み、修正を行う。修正前に関連するガイドラインを参照する（バックエンド関連なら `docs/backend-architecture-guide.md` など）。
+   - **コード修正が必要な場合**: 指摘されたファイルを読み込み、修正を行う。修正前に関連する規約を参照する（層の配置なら `docs/アーキテクチャ.md`、UI なら `docs/フロントエンド規約.md` / `docs/スタイルガイド.md`、テストなら `docs/テストガイドライン.md`）。
    - **質問への回答が必要な場合**: ユーザーに回答内容を確認し、PRにコメントを追加する。
    - **対応不要または判断が必要な場合**: ユーザーに報告し、対応方針を確認する。
 
@@ -62,4 +75,4 @@ description: 指定したPRの未解決レビューコメントに対応する
 - **Resolvedされたコメントは無視する**: GitHub上でresolvedとしてマークされたレビュースレッドは対応済みとみなし、処理対象から除外する
 - レビューコメントの意図が不明な場合は、勝手に解釈せずユーザーに確認を取る
 - 大きな設計変更が必要な場合は、修正前にユーザーの承認を得る
-- 修正後は `npm run typecheck` と `npm run lint` を実行し、エラーがないことを確認する
+- 修正後は `pnpm verify` を実行し、エラーがないことを確認する

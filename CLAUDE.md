@@ -1,23 +1,26 @@
-# Product Starter
+# Video Download Helper
+
+Chrome / Chromium 系ブラウザ向けの動画ダウンロード支援拡張機能（Manifest V3）。
 
 ## 使い方（利用者向け）
 
-- `pnpm dev` で開発サーバーを起動
+- `pnpm dev` で開発ビルドを起動し、`chrome://extensions` から `apps/extension/dist/` を読み込む
 - `pnpm verify` で品質チェック（変更後に実行）
 - 機能を追加したいときは Claude Code に「〇〇な機能を作って」と指示するだけでOK
-- テーブルを追加したいときは「〇〇テーブルを追加して」と指示
 - UIを作りたいときは「〇〇な画面を作って」と指示
 - エラーが出たらエラーメッセージを貼り付けて「直して」と指示
 
 ### コマンド一覧
 
 ```sh
-pnpm dev               # 開発サーバー起動
-pnpm verify            # lint → prisma generate → typecheck → unit test → depcruise
-pnpm test:unit         # Unit テスト
-pnpm test:integration  # Integration テスト（要 DATABASE_URL, INTEGRATION_TEST=true）
+pnpm dev               # Vite dev server（HMR）
+pnpm build             # 本番ビルド → apps/extension/dist/
+pnpm package           # dist/ を zip 化（Chrome Web Store 提出用）
+pnpm verify            # lint → typecheck → unit test → depcruise → build
+pnpm test:unit         # Unit テスト（コアロジック層）
+pnpm test:integration  # Integration テスト（要 Chrome 起動、要 pnpm build 済み）
+pnpm test:e2e          # E2E テスト（Playwright）
 pnpm lint:fix          # 自動フォーマット
-pnpm db:migrate        # DBマイグレーション作成・適用
 pnpm knip              # 未使用コード検出
 ```
 
@@ -27,67 +30,83 @@ pnpm knip              # 未使用コード検出
 
 ### アーキテクチャ
 
-pnpm workspace monorepo。`apps/webapp/` に Next.js 15 App Router アプリ。
+pnpm workspace monorepo。`apps/extension/` に Vite + `@crxjs/vite-plugin` + React の拡張機能。
+バックエンド・データベースは存在しない。永続化は `chrome.storage`。
 
-バックエンド (`src/backend/`) は DDD 4層構造:
+**DDD 4層ではなく「実行コンテキスト層 × コアロジック層」の2層構造。**
 
 ```
-依存方向: presentation → application → domain ← infrastructure
+依存方向: background/offscreen/content/popup → processor → media → shared
 ```
 
-- **domain** — ビジネスルール。外部依存なし。最内層
-- **application** — UseCase。domain のみ依存（infrastructure 直接参照禁止、Gateway interface 経由）
-- **infrastructure** — Gateway/Repository 実装。domain の interface を implements
-- **presentation** — composition（唯一の DI ポイント、全層参照可）、loaders（読み取り）、actions（副作用）
+- **shared** — 型・メッセージ定義・Port interface・純粋 util。最内層。他への依存禁止
+- **media** — 形式判定・HLS/DASH 解析・URL 正規化・ブロックリスト。shared のみ依存
+- **processor** — セグメント取得制御・Mux・ファイル名生成。media, shared に依存
+- **background / offscreen / content / popup** — 実行コンテキスト。`chrome.*`・DOM・ffmpeg.wasm の副作用を担い、各エントリが Composition Root を兼ねる
 
 ### ファイル配置ルール
 
 ```
-src/backend/
-├── domain/
-│   ├── models/          # ドメインモデル (.model.ts)
-│   ├── services/        # ドメインサービス (.service.ts)
-│   ├── gateways/        # Gateway interface (.gateway.ts)
-│   └── repositories/    # Repository interface (.repository.ts)
-├── application/
-│   └── usecases/        # UseCase (.usecase.ts)
-├── infrastructure/
-│   ├── adapters/        # Gateway 実装 (.adapter.ts) — 本番 + Stub
-│   ├── repositories/    # Repository 実装 (.repository.ts)
-│   └── db/              # DB接続 (prisma-client.ts)
-└── presentation/
-    ├── composition/     # DI組み立て (.composition.ts)
-    ├── loaders/         # データ取得 (.loader.ts)
-    └── actions/         # 副作用 (.action.ts, 'use server')
+apps/extension/src/
+├── background/          # Service Worker（index.ts が Composition Root）
+│   ├── request-detector.ts
+│   ├── media-registry.ts
+│   ├── download-manager.ts
+│   └── tab-manager.ts
+├── offscreen/           # Offscreen Document（Blob 生成・ffmpeg 実行）
+│   ├── segment-fetcher.ts
+│   ├── blob-assembler.ts
+│   └── ffmpeg-runner.ts
+├── content/             # Content Script（DOM 監視）
+├── popup/               # React UI（main.tsx が Composition Root）
+│   ├── components/
+│   └── hooks/
+├── processor/           # コアロジック（純粋）
+├── media/               # コアロジック（純粋）— hls/ dash/ direct/
+├── shared/              # コアロジック（純粋）— messages.ts, ports/, storage/, utils.ts
+└── manifest.json
 ```
 
 ### Key Rules
 
-- ファイル命名: kebab-case + レイヤーサフィックス
-- Rich Domain Model 必須。バリデーション・生成はモデル自身のメソッドで行う
-- サービス（UseCase, Domain Service）はクラスベース + コンストラクタ DI。関数エクスポート禁止
-- Domain 層のエラーは `Result<T, E>` 型で返す。Application/Infrastructure は throw
-- 外部 API の Gateway は必ず Stub 実装を用意し、Composition で環境変数に応じて切り替え
-- `index.ts` バレルエクスポート禁止
-- API Route 原則不使用（loaders + Server Actions パターン）
-- Server Component デフォルト。`'use client'` は必要な場合のみ
+- ファイル命名: kebab-case + 役割サフィックス（`.parser.ts` / `.port.ts` / `.adapter.ts` / `.repository.ts` / `.model.ts`）。React コンポーネントのみ PascalCase
+- **コアロジック層（shared/media/processor）で `chrome.*` / `document` / `window` / `Blob` を参照禁止。** 副作用は Port interface として宣言し、実行コンテキスト層から Adapter を注入する
+- **実行コンテキスト同士の import 禁止。** 別バンドルであり、通信は `shared/messages.ts` の判別可能ユニオン経由のみ
+- Rich Domain Model 必須。URL 正規化・重複判定・DRM 判定はモデル/`media/` に閉じる
+- 解析失敗は `Result<T, E>` 型で返す。実行コンテキスト層でユーザー向けメッセージへ変換
+- `chrome.storage` へのアクセスは `shared/storage/*.repository.ts` に集約。他から直接呼ばない
+- `index.ts` バレルエクスポート禁止（各エントリの index.ts はエントリポイントとしてのみ存在）
+- **Popup は状態を所有しない。** 検出結果・進捗は Background が所有し、Popup は購読して描画するだけ
+- **Service Worker は常駐しない前提で書く。** 長時間処理は Offscreen Document へ委譲し、状態は storage から復元可能な形で保持する
+- 拡張機能内部メッセージは `sender.id !== chrome.runtime.id` を破棄して送信元を検証する
+- ページ由来の文字列を `dangerouslySetInnerHTML` へ渡さない
+- リモートコードを実行しない（ffmpeg.wasm も同梱する）
 
 ### テスト
 
-- Unit: domain + application（Gateway はモック、外部依存なし）
-- Integration: infrastructure（`INTEGRATION_TEST=true` + `DATABASE_URL` が未設定ならスキップ）
-- テストパス: `test/unit/`, `test/integration/`（ソース構造を mirror）
+- Unit: `shared/` `media/` `processor/`（副作用なし。`chrome.*` のモック禁止 — 必要なら設計が間違っている）
+- Component: `popup/`（Testing Library + Fake port）
+- Integration: `test/integration/`（実 Chrome に拡張機能をロード。storage 状態と SW 停止時の復元を検証）
+- E2E: `test/e2e/`（Playwright。検出→バッジ→ポップアップ→ダウンロード完了）
+- Unit/Component は実装ファイルと同階層に `*.test.ts(x)` を配置
 
 ### 品質チェック
 
-`pnpm verify` は lint → prisma generate → typecheck → unit test → depcruise を順に実行する。
+`pnpm verify` は lint → typecheck → unit test → depcruise → build を順に実行する。
 コード変更後は必ず `pnpm verify` を実行して全パスすることを確認する。
+build を含めるのは manifest 由来のエラー（エントリ記述漏れ等）が型チェックでは検出できないため。
 
 ### 詳細ルール
 
 詳細な設計ルールは必要に応じて docs/ を読むこと:
 
-- docs/architecture.md — DDD 4層・依存ルール・命名規約
-- docs/frontend.md — フロントエンド規約（データフロー・UI スタック）
-- docs/infrastructure.md — インフラ規約（monorepo・デプロイ・DB・Stub パターン）
-- docs/quality.md — テスト方針・verify コマンド
+- docs/要件定義.md — 機能要件・技術仕様・MVP スコープ・完了条件（**最上位の情報源**）
+- docs/アーキテクチャ.md — 2層構造・依存ルール・Port/Adapter・命名規約
+- docs/フロントエンドアーキテクチャ.md — Popup UI 実装方針
+- docs/フロントエンド規約.md — components/hooks の責務分離・データフロー
+- docs/スタイルガイド.md — Tailwind 規約（寸法・カラー・折り返し）
+- docs/リポジトリ層設計規約.md — `chrome.storage` の Repository 規約
+- docs/インフラストラクチャ規約.md — ビルド・CI・Chrome Web Store 配布
+- docs/品質チェック・テスト規約.md — verify・dependency-cruiser ルール
+- docs/テストガイドライン.md — テスト種別ごとの方針
+- docs/実装計画.md — Phase 0〜3 の実装手順

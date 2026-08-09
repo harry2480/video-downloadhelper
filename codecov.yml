@@ -1,7 +1,7 @@
-# Codecov 設定（テンプレート）
+# Codecov 設定
 # 詳細: https://docs.codecov.com/docs/codecov-yaml
 codecov:
-  branch: develop
+  branch: main
 
 coverage:
   status:
@@ -16,18 +16,18 @@ coverage:
         target: 80%
         threshold: 0%
 
-# 計測対象から除外するパス
+# 計測対象はコアロジック層（shared/ media/ processor/）に限定する。
+# 実行コンテキスト層（background/ offscreen/ content/ popup/）は Integration / E2E で担保する。
 ignore:
   - "**/*.test.ts"
+  - "**/*.test.tsx"
   - "**/*.d.ts"
-  - "apps/webapp/test/**"
-  - "apps/webapp/prisma/**"
-  - "apps/webapp/*.config.*"
-  - "apps/webapp/src/app/**/page.tsx"
-  - "apps/webapp/src/app/**/layout.tsx"
-  - "apps/webapp/src/app/**/loading.tsx"
-  - "apps/webapp/src/app/**/not-found.tsx"
-  - "apps/webapp/src/app/**/error.tsx"
+  - "apps/extension/test/**"
+  - "apps/extension/*.config.*"
+  - "apps/extension/src/background/**"
+  - "apps/extension/src/offscreen/**"
+  - "apps/extension/src/content/**"
+  - "apps/extension/src/popup/**"
 
 # PR にカバレッジコメントを投稿
 comment:

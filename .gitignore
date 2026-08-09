@@ -2,7 +2,6 @@ node_modules/
 node_modules
 .DS_Store
 dist/
-.next/
 .env
 .env.local
 .env.*.local
@@ -17,9 +16,7 @@ looper/output/
 .playwright-mcp/
 settings.local.json
 
-# Supabase local
-supabase/.temp/
-supabase/.branches/
+# Chrome 拡張のビルド成果物
+*.zip
 
 .vscode/settings.json
-.vercel

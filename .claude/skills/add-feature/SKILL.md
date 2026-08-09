@@ -1,65 +1,81 @@
 ---
-description: 新しい機能を追加する。ユーザーが機能の説明をしたとき、DDD4層に従って全レイヤーのファイルを生成する
+description: 新しい機能を追加する。ユーザーが機能の説明をしたとき、2層構造に従って必要なレイヤーのファイルを生成する
 ---
 
 # 機能追加スキル
 
 ユーザーが「〇〇な機能を作って」と指示したときに適用する。
-DDD 4層アーキテクチャに従い、以下のファイルを一括生成する。
+`docs/アーキテクチャ.md` の 2 層構造（実行コンテキスト層 × コアロジック層）に従ってファイルを生成する。
+
+## 最初に判断すること
+
+**その機能に副作用が必要か。** ここを取り違えると層の配置が破綻する。
+
+| 機能の性質 | 生成先 |
+|---|---|
+| 解析・判定・変換のみ（マニフェスト解析、URL 正規化、ファイル名生成など） | コアロジック層のみ |
+| ブラウザ API が必要（検出、保存、storage、DOM 監視） | コアロジック層 + 実行コンテキスト層 + Port |
+| 表示のみ | `popup/` のみ |
 
 ## 生成するファイル
 
-1. **Domain Model** (`src/backend/domain/models/{name}.model.ts`)
-   - Rich Domain Model として設計（ファクトリメソッド `create()` + `reconstruct()`）
-   - バリデーションはモデル自身で行う
-   - エラーは `Result<T, E>` 型で返す
+### 1. コアロジック（必須）
 
-2. **Repository Interface** (`src/backend/domain/repositories/{name}.repository.ts`)
-   - ドメインモデル型のみ使用（ORM型を出さない）
+**`src/media/` または `src/processor/` に純粋関数として実装する。**
 
-3. **Gateway Interface**（必要な場合: `src/backend/domain/gateways/{name}.gateway.ts`）
-   - 外部API連携がある場合のみ
+- `chrome.*` / `document` / `window` / `Blob` を**参照しない**
+- 副作用が必要なら Port interface として宣言し、引数で受け取る
+- 失敗は例外ではなく `Result<T, E>` 型で返す
+- 同階層に `*.test.ts` を必ず作る
 
-4. **UseCase** (`src/backend/application/usecases/{action}-{name}.usecase.ts`)
-   - クラスベース + コンストラクタ DI
-   - `execute()` メソッドで公開
+```typescript
+// src/media/hls/parser.ts
+export function parseMasterPlaylist(
+  content: string,      // 取得済みの文字列を受け取る。自分で fetch しない
+  baseUrl: string,
+): Result<ParsedMasterPlaylist, HlsParseError> { }
+```
 
-5. **Repository 実装** (`src/backend/infrastructure/repositories/prisma-{name}.repository.ts`)
-   - Prisma 経由。ORM型 ↔ ドメインモデル変換を担当
+### 2. 型・メッセージ（必要な場合）
 
-6. **Gateway 実装**（必要な場合）
-   - 本番: `src/backend/infrastructure/adapters/{provider}-{name}.adapter.ts`
-   - Stub: `src/backend/infrastructure/adapters/stub-{name}.adapter.ts`
+- 型: `src/shared/types.ts`
+- コンテキスト間通信: `src/shared/messages.ts` の判別可能ユニオンに追加
+- Port interface: `src/shared/ports/{name}.port.ts`
 
-7. **Composition** (`src/backend/presentation/composition/{name}.composition.ts`)
-   - DI組み立て。環境変数でStub/本番を切り替え
+### 3. 実行コンテキスト（副作用がある場合）
 
-8. **Loader** (`src/backend/presentation/loaders/{name}.loader.ts`)
-   - データ取得用
+どのコンテキストに置くかを間違えないこと。
 
-9. **Action** (`src/backend/presentation/actions/{name}.action.ts`)
-   - `'use server'` 付き。副作用用
+| 副作用 | 置き場所 |
+|---|---|
+| webRequest 監視、タブ管理、状態の所有 | `src/background/` |
+| セグメント取得、Blob 生成、`URL.createObjectURL`、ffmpeg | `src/offscreen/` |
+| DOM 監視、`<video>` / `<audio>` 検出 | `src/content/` |
+| 表示 | `src/popup/` |
 
-10. **ページ** (`src/app/{path}/page.tsx`)
-    - Server Component。loader を呼んでデータ表示
+- Port の実装（Adapter）は各エントリ（`index.ts` / `main.tsx`）で生成し、以降は interface として引き回す
+- **長時間処理を `background/` に置かない。** Service Worker は停止する。`offscreen/` へ委譲する
+- **状態を `popup/` に置かない。** ポップアップは閉じられる。`background/` が所有する
 
-11. **Unit テスト**
-    - `test/unit/domain/models/{name}.model.test.ts`
-    - `test/unit/application/usecases/{action}-{name}.usecase.test.ts`
+### 4. 永続化（必要な場合）
 
-## Prisma スキーマ
+`src/shared/storage/{name}.repository.ts` に追加する。`chrome.storage` を他から直接呼ばない。
+詳細は `docs/リポジトリ層設計規約.md` を参照。
 
-必要に応じて `prisma/schema.prisma` にモデルを追加し、`pnpm db:migrate` でマイグレーションを作成する。
+### 5. UI（必要な場合）
+
+`src/popup/components/` に追加する。詳細は design-ui スキルを参照。
 
 ## ルール
 
-- ファイル命名は kebab-case + レイヤーサフィックス
-- 依存方向: presentation → application → domain ← infrastructure
-- application から infrastructure を直接 import しない
-- presentation/loaders, actions から domain, infrastructure を直接 import しない
-- 関数エクスポートでサービスを実装しない（クラスベース必須）
-- 生成後に `pnpm verify` を実行して全パスすることを確認
+- ファイル命名: kebab-case + 役割サフィックス（`.parser.ts` / `.port.ts` / `.adapter.ts` / `.repository.ts`）
+- コアロジック層は関数エクスポート。状態と依存を持つオーケストレーターのみクラス + コンストラクタ DI
+- `index.ts` バレルエクスポート禁止
+- 実行コンテキスト同士の import 禁止。通信はメッセージ経由のみ
+- `any` 禁止。外部由来のデータは境界でパースして型を確定させる
+- 生成後は必ず `pnpm verify` を実行する（依存方向違反は depcruise が検出する）
 
-## サンプル（参考）
+## 実装順序
 
-既存の Joke 機能（`joke.model.ts`, `generate-joke.usecase.ts` 等）を参考にする。
+**必ずコアロジック層から書く。** 先に純粋関数とテストを作れば、ブラウザを起動せずに正しさを確認できる。
+実行コンテキストは、検証済みのコアロジックを繋ぐ配線として最後に書く。

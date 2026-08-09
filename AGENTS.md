@@ -1,99 +1,94 @@
-<!--
-【テンプレート】AIエージェント運用ガイド
-リポジトリ内でAIエージェント（Copilot, Claude Code, Cursorなど）が自律的または対話的にコード操作・調査・ドキュメント作成を行う際のルールや指針を定義するテンプレートです。
-プレースホルダー（{{ }}）をプロジェクト固有の情報に置き換えて使用してください。
--->
+# Video Download Helper AIエージェントへの指針 (AGENTS.md)
 
-# {{PROJECT_NAME / 例：〇〇プロジェクト}} AIエージェントへの指針 (AGENTS.md)
+このファイルは、このリポジトリでコードを操作する AI エージェント（Claude Code / Codex / Copilot 等）へのルールを提供します。
 
-このファイルは、このリポジトリでコードを操作する際のAIエージェントへのルールおよび指針を提供します。
+**設計ルールの詳細は [CLAUDE.md](CLAUDE.md) と `docs/` を単一の情報源とします。** このファイルはそれを重複させず、リポジトリ運用上のルールのみを扱います。
+
+## プロジェクト概要
+
+Chrome / Chromium 系ブラウザ向けの動画ダウンロード支援拡張機能（Manifest V3）。
+pnpm workspace monorepo で、`apps/extension/` に Vite + React + TypeScript の拡張機能が入ります。
+**サーバーサイド・データベースは存在しません。** 永続化は `chrome.storage`、通信はコンテキスト間メッセージのみです。
 
 ## 必須ルール
 
-### {{WORKTREE_RULE_TITLE / 例：Worktree必須}}
-コード変更を伴う作業は、**必ず {{GIT_WORKFLOW / 例：git worktree}} を作成してから開始すること**。メインのリポジトリディレクトリでは直接コード変更を行わない。
+### 要件定義が最上位
 
-```bash
-# 1. {{WORKFLOW_STEP_1 / 例：worktreeを作成}}
-{{CMD_WORKTREE_CREATE / 例：git worktree add ../{{PROJECT_PREFIX}}-<branch-name> -b <branch-name>}}
+`docs/要件定義.md` が仕様の最上位の情報源です。実装方針に迷ったら推測せず、まずこれを読むこと。
+要件定義と矛盾する実装・ドキュメントを書かないこと。矛盾に気づいた場合は勝手に解釈せず、ユーザーに確認する。
 
-# 2. {{WORKFLOW_STEP_2 / 例：環境や権限定義のコピー}}
-{{CMD_ENV_COPY / 例：cp .env ../{{PROJECT_PREFIX}}-<branch-name>/}}
-```
+### 権限の追加は要確認
 
-- **目的**: {{WORKFLOW_PURPOSE / 例：developブランチを常にクリーンに保ち、作業の分離と並列作業を容易にする}}
-- **例外なし**: {{WORKFLOW_EXCEPTION / 例：ドキュメントのみの変更も含め、すべてのコミットでworktreeを使用すること}}
+`apps/extension/src/manifest.json` の `permissions` / `host_permissions` を追加・変更する場合は、**実装前にユーザーへ確認する**。
+Chrome Web Store の審査結果とインストール時の警告文言に直結し、後から戻すのが難しいためです。
 
-### データアクセス
-**UIコンポーネント（{{UI_EXTENSION / 例：`.tsx`}}ファイル）から{{DB_CLIENT / 例：Supabase}}を直接呼び出してはいけない。** {{SERVICE_LAYER / 例：Service層}}経由でアクセスすること。
-コード例・配置場所の詳細は設計ガイドラインを参照。
+### コアロジックの純粋性を壊さない
 
-### {{DECLARATIVE_DATA_TITLE / 例：宣言的データ管理}}
-{{DATA_DOMAIN / 例：マスターデータや定義データ}}は **{{DATA_FORMAT / 例：YAML}}ファイルで宣言的に管理** されている。SQLマイグレーションで直接変更しないこと。
-- `{{DATA_FILE_PATH_1 / 例：data/items.yaml}}` - {{DATA_DESC_1 / 例：アイテム定義}}
-- CI/CDデプロイ時に `{{SYNC_CMD / 例：npm run data:sync}}` で自動同期される
+`src/shared/` `src/media/` `src/processor/` で `chrome.*` / `document` / `window` / `Blob` を参照しないこと。
+ここが崩れると Unit テストが Node.js 上で動かなくなり、テスト戦略全体が破綻します。
+副作用が必要な場合は Port interface として宣言し、実行コンテキスト層から注入する。
 
-### 認可（Authorization）
-- **{{USER_ID_VAR / 例：userId}}は必ずサーバーサイドでセッションから取得する**（クライアントから受け取らない）
-- **認可チェックは{{ACTION_LAYER / 例：actions層}}で行う**
-- **リソースの所有者チェックは専用の認可関数に分離する**
+### 外部送信の禁止
+
+閲覧 URL・メディア URL・ページタイトルを外部へ送信するコードを書かないこと。テレメトリも同様です。
+リモートコード（外部 CDN のスクリプト・WASM）を読み込まないこと。Chrome Web Store ポリシー違反になります。
+
+### Push前の必須チェック
+
+`git push` する前に以下を実行し、全てパスすることを確認する：
+
+1. `pnpm verify` - lint → typecheck → unit test → depcruise → build
+2. `pnpm knip` - 未使用コード検出
+
+いずれかが失敗した場合は修正してから push すること。
+depcruise の違反を設定変更で回避しないこと。モジュールの配置を見直すのが正しい対処です。
+
+### ベースブランチ
+
+このリポジトリのベースブランチは `main`（`develop` は存在しない）。main への直接 push は禁止。
 
 ## 作業ルール
 
-### {{PARALLEL_PR_RULE / 例：並列PR作成}}
-複数の独立したPRを作成する場合は `{{SKILL_PARALLEL_PR / 例：/parallel-pr}}` スキルを使用すること。
-
 ### 要件定義・実装計画
+
 依頼された場合は、最初に論点を洗い出してユーザーに質問しながらクリアにし、マークダウンでドキュメントを作成すること。
 
-### 自己学習
-セッション中の発見やPRレビューのフィードバックを、プロジェクト設定に自動反映する仕組み。
-
-- **PRレビュー後**: `{{SKILL_RETRO / 例：/retro}} {PR番号}` でCodeRabbit・レビュアーの指摘を分析し、各種設定ファイルに反映する
-- **学びの分類先**:
-  - 普遍ルール → `{{GUIDELINE_FILE / 例：CLAUDE.md}}`
-  - ワークフロー改善 → `{{SKILLS_DIR / 例：skills/commands}}`
-  - 運用知識・ワークアラウンド → `{{MEMORY_FILE / 例：MEMORY.md}}`
-
 ### ドキュメント管理
-設計作業などのドキュメント作成を依頼された場合は、以下のルールに従ってファイルを作成すること：
 
-- ファイル名: `{{DOC_NAME_FMT / 例：YYYYMMDD_HHMM_{日本語の作業内容}.md}}`
-- 保存場所: `{{DOC_DIR / 例：docs/}}` 以下
+- 保存場所: `docs/` 以下
+- ファイル名: 日本語の内容名（既存の `アーキテクチャ.md` 等に揃える）
 - フォーマット: Markdown
 
 ### GitHub Issue作成
-- プラン内容を簡略化せず、そのままissueに記載する
-- コード例、SQL、型定義などの詳細な実装内容を含める
+
+- プラン内容を簡略化せず、そのまま issue に記載する
+- コード例、型定義などの詳細な実装内容を含める
 - 検証方法を具体的に記載する
-
-### Push前の必須チェック
-`git push` する前に、以下のコマンドを必ず実行し、全てパスすることを確認する：
-
-1. `{{CHECK_CMD_1 / 例：pnpm run biome:check:write}}` - フォーマット + リント
-2. `{{CHECK_CMD_2 / 例：pnpm run typecheck}}` - 型チェック
-3. `{{CHECK_CMD_3 / 例：pnpm run test:unit}}` - ユニットテスト
-
-いずれかが失敗した場合は修正してからpushすること。
 
 ## 開発コマンド
 
-よく使うコマンド:
-- `{{DEV_CMD / 例：pnpm run dev}}` - 開発サーバー起動
-- `{{TEST_CMD / 例：pnpm run test:unit}}` - ユニットテスト実行
-
-## アーキテクチャ
-
-**設計思想**: {{ARCH_CONCEPT / 例：機能単位モジュール分割}}
-
-**主要技術スタック**: {{TECH_STACK / 例：Next.js / Supabase / Tailwind CSS / TypeScript}}
+| コマンド | 内容 |
+|---|---|
+| `pnpm dev` | Vite dev server（`chrome://extensions` から `apps/extension/dist/` を読み込む） |
+| `pnpm build` | 本番ビルド |
+| `pnpm verify` | 品質チェック一式 |
+| `pnpm test:unit` | Unit テスト |
+| `pnpm test:integration` | Integration テスト（要ビルド済み `dist/`） |
+| `pnpm test:e2e` | E2E テスト（Playwright） |
 
 ## ディレクトリ構造
 
 ```text
-{{SRC_DIR / 例：src/}}
-├── {{APP_DIR / 例：app/}}              # {{APP_DIR_DESC / 例：ルーティング}}
-├── {{COMPONENTS_DIR / 例：components/}}       # {{COMPONENTS_DIR_DESC / 例：共通UIコンポーネント}}
-├── {{FEATURES_DIR / 例：features/}}         # {{FEATURES_DIR_DESC / 例：機能ベースモジュール}}
-└── {{LIB_DIR / 例：lib/}}              # {{LIB_DIR_DESC / 例：共有ライブラリ}}
+apps/extension/src/
+├── background/    # Service Worker（検出の集約、状態の所有）
+├── offscreen/     # Offscreen Document（セグメント取得、Blob 生成、ffmpeg）
+├── content/       # Content Script（DOM 監視）
+├── popup/         # React UI（状態を所有しない購読者）
+├── processor/     # コアロジック（純粋）
+├── media/         # コアロジック（純粋）— 検出・HLS/DASH 解析
+├── shared/        # コアロジック（純粋）— 型・メッセージ・ports・storage
+└── manifest.json
 ```
+
+依存方向: `background/offscreen/content/popup → processor → media → shared`
+実行コンテキスト同士の import は禁止（別バンドルのため成立しない）。通信はメッセージ経由のみ。

@@ -19,10 +19,7 @@ reviews:
       - "dependabot"
       - "renovate"
   path_filters:
-    - "admin/**"
-    - "web/**"
-    - "packages/**"
-    - "supabase/**"
+    - "apps/**"
     - "docs/**"
     - "!**/*.md"
     - "!**/*.mdx"
@@ -36,6 +33,5 @@ reviews:
     - "!**/yarn.lock"
     - "!**/package-lock.json"
     - "!**/dist/**"
-    - "!**/.next/**"
     - "!**/coverage/**"
     - "!**/*.snap"
