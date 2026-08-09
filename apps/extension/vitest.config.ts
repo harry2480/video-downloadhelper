@@ -11,7 +11,13 @@ export default defineConfig({
 			provider: 'v8',
 			reporter: ['text', 'lcov'],
 			include: ['src/shared/**', 'src/media/**', 'src/processor/**'],
-			exclude: ['**/*.test.ts', '**/*.d.ts'],
+			exclude: [
+				'**/*.test.ts',
+				'**/*.d.ts',
+				// chrome.storage を直接呼ぶ Repository は Integration テストで検証する。
+				// Unit テストの対象外なので計測からも外す（codecov.yml と揃えること）
+				'src/shared/storage/**',
+			],
 		},
 	},
 });
