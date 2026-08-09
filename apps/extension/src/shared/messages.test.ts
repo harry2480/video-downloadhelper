@@ -120,12 +120,34 @@ describe('parseContentMessage', () => {
 		});
 	});
 
-	it('候補数に上限を設ける', () => {
-		const many = Array.from({ length: 500 }, (_, index) => ({
-			...VALID,
-			sourceUrl: `https://cdn.example.com/${index}.mp4`,
-		}));
+	describe('件数の上限', () => {
+		it('有効な候補を 50 件までに絞る', () => {
+			const many = Array.from({ length: 500 }, (_, index) => ({
+				...VALID,
+				sourceUrl: `https://cdn.example.com/${index}.mp4`,
+			}));
 
-		expect(parseContentMessage(message(many))?.candidates).toHaveLength(50);
+			expect(parseContentMessage(message(many))?.candidates).toHaveLength(50);
+		});
+
+		it('無効な候補が先頭に並んでも有効な候補を押し出さない', () => {
+			// 「先頭 N 件を取ってから絞る」実装だと 0 件になる
+			const padded = [
+				...Array.from({ length: 100 }, () => ({ sourceUrl: 123 })),
+				{ ...VALID, sourceUrl: 'https://cdn.example.com/real.mp4' },
+			];
+
+			const parsed = parseContentMessage(message(padded));
+
+			expect(parsed?.candidates).toEqual([
+				{ ...VALID, sourceUrl: 'https://cdn.example.com/real.mp4' },
+			]);
+		});
+
+		it('巨大な配列でも走査を打ち切る', () => {
+			const huge = Array.from({ length: 100_000 }, () => ({ sourceUrl: 123 }));
+
+			expect(parseContentMessage(message(huge))).toBeUndefined();
+		});
 	});
 });

@@ -15,8 +15,10 @@ export type ContentToBackground = {
 	candidates: MediaElementCandidate[];
 };
 
-/** 1 メッセージで受け付ける候補数の上限。異常なページからの大量送信を防ぐ。 */
+/** 1 メッセージで受け付ける有効な候補数の上限。異常なページからの大量送信を防ぐ。 */
 const MAX_CANDIDATES = 50;
+/** 検証のために走査する要素数の上限。巨大な配列を渡された場合の負荷を抑える。 */
+const MAX_SCANNED_CANDIDATES = 500;
 const MAX_URL_LENGTH = 4_096;
 const MAX_TITLE_LENGTH = 200;
 
@@ -65,10 +67,16 @@ export function parseContentMessage(raw: unknown): ContentToBackground | undefin
 	if (raw.kind !== 'media-elements-detected') return undefined;
 	if (!Array.isArray(raw.candidates)) return undefined;
 
-	const candidates = raw.candidates
-		.slice(0, MAX_CANDIDATES)
-		.map(parseCandidate)
-		.filter((candidate): candidate is MediaElementCandidate => candidate !== undefined);
+	// 「先頭 N 件を取ってから絞る」と、無効な候補が前に並ぶだけで有効な候補が
+	// 押し出される。有効なものを N 件集めた時点で打ち切る形にする。
+	// 走査自体も上限で止め、巨大な配列を渡された場合の負荷を抑える。
+	const candidates: MediaElementCandidate[] = [];
+	for (const entry of raw.candidates.slice(0, MAX_SCANNED_CANDIDATES)) {
+		const candidate = parseCandidate(entry);
+		if (!candidate) continue;
+		candidates.push(candidate);
+		if (candidates.length >= MAX_CANDIDATES) break;
+	}
 
 	if (candidates.length === 0) return undefined;
 

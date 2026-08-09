@@ -81,6 +81,31 @@ describe('DOM 検出', () => {
 		await page.close();
 	});
 
+	it('メタデータ読み込み後に再生時間・解像度を送り直す', async () => {
+		// duration / videoWidth は loadedmetadata の後にしか取れない。
+		// 重複判定を URL だけで行うと、この更新が Background へ届かない
+		const page = await harness.context.newPage();
+		await page.goto(`${harness.server.origin}/media-metadata.html`);
+
+		const tabId = await resolveTabId(harness, 'media-metadata.html');
+
+		const stored = await waitFor(
+			() => readStoredMedia(harness, tabId),
+			(media) => media?.[0]?.width !== undefined,
+			{ label: 'メタデータの反映', diagnose: () => snapshot(harness) },
+		);
+
+		// この動画は実際に取得されるためネットワーク検出も働き、そちらが優先される。
+		// それでも DOM 側にしかない情報は統合で失われない（要件定義 2.1）
+		expect(stored).toHaveLength(1);
+		expect(stored?.[0]).toMatchObject({ detectedBy: 'network' });
+		expect(stored?.[0]?.width).toBe(320);
+		expect(stored?.[0]?.height).toBe(240);
+		expect(stored?.[0]?.duration).toBeGreaterThan(0);
+
+		await page.close();
+	});
+
 	it('動的に追加された video を検出する', async () => {
 		const page = await harness.context.newPage();
 		await page.goto(`${harness.server.origin}/spa.html`);
