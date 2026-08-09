@@ -24,7 +24,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9",
-		"knip": "^5.85.0",
+		"knip": "^6.32.0",
 		"simple-git-hooks": "^2.13.1"
 	},
 	"pnpm": {
