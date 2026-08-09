@@ -74,6 +74,29 @@ test('ポップアップが要件どおりの幅で描画される', async () =>
 	await page.close();
 });
 
+test('ポップアップがライト・ダークで配色を切り替える', async () => {
+	// Tailwind v4 は @theme をホイストするため、@media の中に書くと条件が
+	// 失われて片方の配色だけが常に効く。生成された CSS を目視しないと
+	// 気づけないので、実ブラウザの算出値で確認する。
+	const page = await extension.context.newPage();
+
+	const readSurface = async () =>
+		page.locator('#root > div').evaluate((element) => getComputedStyle(element).backgroundColor);
+
+	await page.emulateMedia({ colorScheme: 'light' });
+	await page.goto(popupUrl(extension.extensionId));
+	const light = await readSurface();
+
+	await page.emulateMedia({ colorScheme: 'dark' });
+	const dark = await readSurface();
+
+	expect(light).not.toBe(dark);
+	expect(light).toBe('rgb(255, 255, 255)');
+	expect(dark).toBe('rgb(32, 33, 36)');
+
+	await page.close();
+});
+
 test('Content Script の検出がバッジまで届く', async () => {
 	// manifest による注入 → DOM 検出 → メッセージ → Background → バッジ という
 	// 経路を通しで確認する。preload="none" のためネットワーク検出は働かず、

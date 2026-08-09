@@ -1,4 +1,4 @@
-import type { MediaElementCandidate } from './types';
+import type { DetectedMedia, MediaElementCandidate } from './types';
 
 /**
  * コンテキスト間通信の単一の窓口。
@@ -14,6 +14,29 @@ export type ContentToBackground = {
 	kind: 'media-elements-detected';
 	candidates: MediaElementCandidate[];
 };
+
+/** Background から Content Script への指示。 */
+export type BackgroundToContent = {
+	kind: 'rescan';
+};
+
+/** Popup から Background への要求。Port 経由で送る。 */
+export type PopupToBackground = { kind: 'rescan' };
+
+/**
+ * Background から Popup への通知。
+ *
+ * Popup は状態を所有しない。これを購読して描画するだけにする。
+ */
+export type BackgroundToPopup = {
+	kind: 'media-list';
+	media: DetectedMedia[];
+	/** ブロックリスト対象サイトのため機能を無効化しているか */
+	blocked: boolean;
+};
+
+/** Popup が Background へ張る Port の名前。 */
+export const POPUP_PORT_NAME = 'popup';
 
 /** 1 メッセージで受け付ける有効な候補数の上限。異常なページからの大量送信を防ぐ。 */
 const MAX_CANDIDATES = 50;

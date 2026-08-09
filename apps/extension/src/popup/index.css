@@ -3,8 +3,14 @@
 /*
  * セマンティックトークンを単一の情報源とする。
  * コンポーネント側で直値カラー（bg-[#1a73e8]）を書かないこと。
- * ダークモードは prefers-color-scheme による変数の切り替えで対応し、
- * dark: variant をコンポーネントへ散らさない（docs/スタイルガイド.md 参照）。
+ *
+ * **@theme をメディアクエリの中に置かないこと。** Tailwind v4 は @theme を
+ * ホイストするため、@media の中に書いても条件が失われ、最後の定義が
+ * 無条件に適用される。ダークの値だけが常に効き、ライトモードが
+ * 一度も描画されなくなる。
+ *
+ * ライトを @theme の既定値として定義し、ダークは素の :root で上書きする。
+ * ユーティリティは var(--color-*) を参照するため、実行時に切り替わる。
  */
 @theme {
 	--color-surface: #ffffff;
@@ -19,7 +25,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-	@theme {
+	:root {
 		--color-surface: #202124;
 		--color-surface-muted: #303134;
 		--color-border: #5f6368;
@@ -30,4 +36,10 @@
 		--color-danger: #f28b82;
 		--color-success: #81c995;
 	}
+}
+
+/* ポップアップの余白が地の色のまま残らないようにする */
+html,
+body {
+	background-color: var(--color-surface);
 }
