@@ -1,4 +1,5 @@
 import type { MediaVariant } from '../../shared/types';
+import { classifyCodecs } from '../codecs';
 import { detectPlaylistKind, parseMasterPlaylist, parseMediaPlaylist } from './parser';
 import type { ParsedMasterPlaylist, ParsedMediaPlaylist } from './types';
 
@@ -46,19 +47,18 @@ function toMediaVariants(parsed: ParsedMasterPlaylist): MediaVariant[] {
 	// 高画質を先頭にする。既定で最高品質を選ばせるため（要件定義 4.4）
 	return [...parsed.variants]
 		.sort((a, b) => (b.height ?? 0) - (a.height ?? 0) || b.bandwidth - a.bandwidth)
-		.map((variant, index): MediaVariant => {
-			const [videoCodec, audioCodec] = variant.codecs ?? [];
-			return {
+		.map(
+			(variant, index): MediaVariant => ({
 				id: `v${index}`,
 				url: variant.uri,
 				...(variant.width !== undefined && { width: variant.width }),
 				...(variant.height !== undefined && { height: variant.height }),
 				bandwidth: variant.bandwidth,
 				...(variant.frameRate !== undefined && { fps: variant.frameRate }),
-				...(videoCodec !== undefined && { videoCodec }),
-				...(audioCodec !== undefined && { audioCodec }),
-			};
-		});
+				// CODECS は順不同。並び順で映像・音声を決めない
+				...classifyCodecs(variant.codecs),
+			}),
+		);
 }
 
 function analyzeMaster(parsed: ParsedMasterPlaylist): HlsAnalysis {

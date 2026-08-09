@@ -56,6 +56,29 @@ describe('analyzeHlsManifest', () => {
 			});
 		});
 
+		it('CODECS の並び順に依存せず映像・音声を振り分ける', () => {
+			// CODECS は順不同（RFC 8216）。位置で決めると入れ替わる
+			const content = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720,CODECS="mp4a.40.2,avc1.4d401e"
+720p/index.m3u8`;
+			const analysis = unwrap(analyzeHlsManifest(content, BASE_URL));
+
+			expect(analysis.variants?.[0]).toMatchObject({
+				videoCodec: 'avc1.4d401e',
+				audioCodec: 'mp4a.40.2',
+			});
+		});
+
+		it('音声のみの Variant を映像コーデックとして扱わない', () => {
+			const content = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="mp4a.40.2"
+audio/index.m3u8`;
+			const variant = unwrap(analyzeHlsManifest(content, BASE_URL)).variants?.[0];
+
+			expect(variant?.audioCodec).toBe('mp4a.40.2');
+			expect(variant).not.toHaveProperty('videoCodec');
+		});
+
 		it('解像度がなければ BANDWIDTH で並べる', () => {
 			const content = `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=1000000
