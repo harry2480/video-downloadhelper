@@ -58,7 +58,7 @@ jobs:
 
       - name: Playwright レポートをアップロード（失敗時）
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: apps/extension/playwright-report/
@@ -67,7 +67,7 @@ jobs:
       # レビュアーが chrome://extensions へ手動ロードして確認するための成果物
       - name: ビルド成果物をアップロード
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: extension-dist
           path: apps/extension/dist/
