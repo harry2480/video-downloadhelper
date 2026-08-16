@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: pnpm をセットアップ
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Node.js をセットアップ（pnpm キャッシュ付き）
         uses: actions/setup-node@v4
