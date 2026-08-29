@@ -9,8 +9,13 @@ import { isFetchableUrl } from './media-type';
  * 「押せるのに保存できない」「保存できるのにボタンが出ない」がすぐ起きる。
  */
 
-/** Phase 1 で直接保存できる形式。HLS / DASH はセグメント結合の実装後に対応する。 */
-const DOWNLOADABLE_TYPES: ReadonlySet<MediaType> = new Set<MediaType>(['direct', 'audio']);
+/**
+ * 保存できる形式。
+ *
+ * HLS はセグメントを取得して連結する（Offscreen Document 側）。
+ * DASH は映像・音声の結合が要るため Phase 2。
+ */
+const DOWNLOADABLE_TYPES: ReadonlySet<MediaType> = new Set<MediaType>(['direct', 'audio', 'hls']);
 
 const DRM_REJECTED = 'DRM で保護されているため保存できません';
 const NOT_DOWNLOADABLE = 'この形式の保存はまだできません';

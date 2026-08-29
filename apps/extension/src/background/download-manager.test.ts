@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectionInput } from '../media/detected-media.model';
+import type { AssemblerPort, AssemblyJob } from '../shared/ports/assembler.port';
 import type {
 	DownloadSnapshot,
 	DownloadStartFailure,
@@ -82,11 +83,30 @@ function createHarness() {
 		},
 	};
 
+	const jobs: AssemblyJob[] = [];
+	const cancelledJobs: string[] = [];
+	const released: string[] = [];
+	let startAssemblyFails = false;
+
+	const assembler: AssemblerPort = {
+		async start(job) {
+			if (startAssemblyFails) throw new Error('offscreen を作れない');
+			jobs.push(job);
+		},
+		async cancel(taskId) {
+			cancelledJobs.push(taskId);
+		},
+		async release(objectUrl) {
+			released.push(objectUrl);
+		},
+	};
+
 	const broadcasts: { tabId: number; tasks: DownloadTask[] }[] = [];
 	let seq = 0;
 	let time = 1_000;
 	const manager = new DownloadManager(
 		downloader,
+		assembler,
 		taskRepository,
 		registry,
 		(tabId, tasks) => broadcasts.push({ tabId, tasks }),
@@ -100,6 +120,12 @@ function createHarness() {
 		started,
 		cancelled,
 		broadcasts,
+		jobs,
+		cancelledJobs,
+		released,
+		failAssemblyStart() {
+			startAssemblyFails = true;
+		},
 		get tasks() {
 			return stored;
 		},
@@ -202,14 +228,65 @@ describe('start', () => {
 		});
 	});
 
-	it('HLS はまだ保存しない', async () => {
-		// セグメント取得・結合の実装後に対応する
+	it('HLS は Offscreen へ組み立てを依頼する', async () => {
+		// Service Worker では URL.createObjectURL が使えない（要件定義 2.6）
 		const harness = createHarness();
 		const media = await harness.detect(HLS_URL);
 
 		await harness.manager.start(TAB_ID, { mediaId: media.id });
 
 		expect(harness.started).toHaveLength(0);
+		expect(harness.jobs).toEqual([
+			{ taskId: 'task-1', playlistUrl: HLS_URL, maxBytes: 2 * 1024 * 1024 * 1024 },
+		]);
+		expect(harness.tasks[0]?.status).toBe('queued');
+	});
+
+	it('選択した品質のプレイリストを組み立て対象にする', async () => {
+		const harness = createHarness();
+		const media = await harness.detect(HLS_URL);
+		await harness.enrich(media.dedupeKey, {
+			variants: [
+				{ id: 'v0', url: 'https://cdn.example.com/1080/index.m3u8', height: 1080 },
+				{ id: 'v1', url: 'https://cdn.example.com/720/index.m3u8', height: 720 },
+			],
+		});
+
+		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v1' });
+
+		expect(harness.jobs[0]?.playlistUrl).toBe('https://cdn.example.com/720/index.m3u8');
+	});
+
+	it('推定サイズが上限を超えるなら取りかからない', async () => {
+		// 組み立ては全体をメモリへ載せる。始めてから落ちるより先に伝える
+		const harness = createHarness();
+		const media = await harness.detect(HLS_URL);
+		await harness.enrich(media.dedupeKey, {
+			variants: [
+				{
+					id: 'v0',
+					url: 'https://cdn.example.com/1080/index.m3u8',
+					estimatedSize: 3 * 1024 * 1024 * 1024,
+				},
+			],
+		});
+
+		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v0' });
+
+		expect(harness.jobs).toHaveLength(0);
+		expect(harness.tasks[0]).toMatchObject({
+			status: 'failed',
+			error: expect.stringContaining('2GB'),
+		});
+	});
+
+	it('組み立てを依頼できなければ失敗にする', async () => {
+		const harness = createHarness();
+		harness.failAssemblyStart();
+		const media = await harness.detect(HLS_URL);
+
+		await harness.manager.start(TAB_ID, { mediaId: media.id });
+
 		expect(harness.tasks[0]?.status).toBe('failed');
 	});
 
@@ -345,6 +422,105 @@ describe('進捗の取り込み', () => {
 		await harness.manager.handleBrowserChange(1);
 
 		expect(harness.tasks[0]).toMatchObject({ status: 'completed', progress: 100 });
+	});
+});
+
+describe('組み立ての通知', () => {
+	async function startAssembly() {
+		const harness = createHarness();
+		const media = await harness.detect(HLS_URL);
+		await harness.manager.start(TAB_ID, { mediaId: media.id });
+		return { harness, taskId: harness.tasks[0]?.id as string };
+	}
+
+	it('進捗をセグメントの本数から出す', async () => {
+		const { harness, taskId } = await startAssembly();
+
+		await harness.manager.handleAssemblyProgress(taskId, 3, 4, 300);
+
+		expect(harness.tasks[0]).toMatchObject({
+			status: 'processing',
+			progress: 75,
+			downloadedBytes: 300,
+		});
+	});
+
+	it('組み立てが終わったらブラウザへ保存を依頼する', async () => {
+		const { harness, taskId } = await startAssembly();
+
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234);
+
+		expect(harness.started[0]?.url).toBe('blob:chrome-extension://x/abc');
+		expect(harness.tasks[0]).toMatchObject({
+			status: 'downloading',
+			objectUrl: 'blob:chrome-extension://x/abc',
+			totalBytes: 1_234,
+		});
+	});
+
+	it('保存し終えたらオブジェクト URL を解放する', async () => {
+		// 抱えたままにするとメモリに残り続ける
+		const { harness, taskId } = await startAssembly();
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234);
+
+		harness.setSnapshots([
+			{ downloadId: 1, state: 'complete', bytesReceived: 1_234, totalBytes: 1_234 },
+		]);
+		await harness.manager.refresh();
+
+		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
+	});
+
+	it('中止済みのタスクの結果は捨てる', async () => {
+		const { harness, taskId } = await startAssembly();
+		await harness.manager.cancel(taskId);
+
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234);
+
+		expect(harness.started).toHaveLength(0);
+		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
+	});
+
+	it('失敗の理由をそのまま記録する', async () => {
+		// 理由は Offscreen 側でユーザー向けの文言にしてある
+		const { harness, taskId } = await startAssembly();
+
+		await harness.manager.handleAssemblyFailed(taskId, 'fMP4 セグメントの HLS には未対応です');
+
+		expect(harness.tasks[0]).toMatchObject({
+			status: 'failed',
+			error: 'fMP4 セグメントの HLS には未対応です',
+		});
+	});
+
+	it('知らないタスクの通知は無視する', async () => {
+		const { harness } = await startAssembly();
+
+		await harness.manager.handleAssemblyProgress('unknown', 1, 2, 10);
+		await harness.manager.handleAssemblyFailed('unknown', '失敗');
+
+		expect(harness.tasks[0]?.status).toBe('queued');
+	});
+
+	it('組み立て中の中止で Offscreen へも伝える', async () => {
+		const { harness, taskId } = await startAssembly();
+		await harness.manager.handleAssemblyProgress(taskId, 1, 4, 100);
+
+		await harness.manager.cancel(taskId);
+
+		expect(harness.cancelledJobs).toEqual([taskId]);
+		expect(harness.tasks[0]?.status).toBe('cancelled');
+	});
+
+	it('組み立て中は開始待ちの掃除にかからない', async () => {
+		// セグメント取得は 60 秒を超えることがある
+		const { harness, taskId } = await startAssembly();
+		await harness.manager.handleAssemblyProgress(taskId, 1, 4, 100);
+
+		harness.advance(120_000);
+		await harness.manager.refresh();
+
+		expect(harness.tasks[0]?.status).toBe('processing');
 	});
 });
 

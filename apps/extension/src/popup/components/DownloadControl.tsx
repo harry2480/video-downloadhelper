@@ -25,6 +25,13 @@ function progressLabel(task: DownloadTask): string {
 	const received = formatBytes(task.downloadedBytes);
 	const total = formatBytes(task.totalBytes);
 
+	// HLS はセグメントを集めてから保存する。何をしているのかを伝える
+	if (task.status === 'processing') {
+		return received === undefined
+			? `セグメントを取得しています…（${task.progress}%）`
+			: `セグメントを取得しています…（${task.progress}% / ${received}）`;
+	}
+
 	if (received !== undefined && total !== undefined) {
 		return `${task.progress}%（${received} / ${total}）`;
 	}

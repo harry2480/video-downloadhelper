@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseContentMessage, parsePopupMessage } from './messages';
+import {
+	parseAssemblyCommand,
+	parseContentMessage,
+	parseOffscreenMessage,
+	parsePopupMessage,
+} from './messages';
 
 /**
  * Content Script はページと同じプロセスで動くため、送られてくる値は
@@ -215,5 +220,115 @@ describe('parsePopupMessage', () => {
 		expect(
 			parsePopupMessage({ kind: 'start-download', request: { mediaId: long } }),
 		).toBeUndefined();
+	});
+});
+
+describe('parseOffscreenMessage', () => {
+	it('進捗を通す', () => {
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-progress',
+				taskId: 't1',
+				completed: 3,
+				total: 10,
+				bytes: 300,
+			}),
+		).toEqual({ kind: 'assembly-progress', taskId: 't1', completed: 3, total: 10, bytes: 300 });
+	});
+
+	it('完了とオブジェクト URL を通す', () => {
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-done',
+				taskId: 't1',
+				objectUrl: 'blob:chrome-extension://x/abc',
+				bytes: 10,
+			}),
+		).toEqual({
+			kind: 'assembly-done',
+			taskId: 't1',
+			objectUrl: 'blob:chrome-extension://x/abc',
+			bytes: 10,
+		});
+	});
+
+	it('失敗の理由を通す', () => {
+		expect(
+			parseOffscreenMessage({ kind: 'assembly-failed', taskId: 't1', reason: '取得できません' }),
+		).toEqual({ kind: 'assembly-failed', taskId: 't1', reason: '取得できません' });
+	});
+
+	it('形が合わないものは破棄する', () => {
+		expect(parseOffscreenMessage(undefined)).toBeUndefined();
+		expect(parseOffscreenMessage({ kind: 'assembly-progress' })).toBeUndefined();
+		expect(parseOffscreenMessage({ kind: 'unknown', taskId: 't1' })).toBeUndefined();
+		expect(
+			parseOffscreenMessage({ kind: 'assembly-progress', taskId: 't1', completed: 1, total: 2 }),
+		).toBeUndefined();
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-progress',
+				taskId: 't1',
+				completed: -1,
+				total: 2,
+				bytes: 1,
+			}),
+		).toBeUndefined();
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-progress',
+				taskId: 't1',
+				completed: Number.NaN,
+				total: 2,
+				bytes: 1,
+			}),
+		).toBeUndefined();
+		expect(
+			parseOffscreenMessage({ kind: 'assembly-done', taskId: 't1', bytes: 1 }),
+		).toBeUndefined();
+		expect(
+			parseOffscreenMessage({ kind: 'assembly-done', taskId: 't1', objectUrl: 'blob:x' }),
+		).toBeUndefined();
+		expect(parseOffscreenMessage({ kind: 'assembly-failed', taskId: 't1' })).toBeUndefined();
+	});
+});
+
+describe('parseAssemblyCommand', () => {
+	it('組み立ての依頼を通す', () => {
+		expect(
+			parseAssemblyCommand({
+				kind: 'assemble-hls',
+				taskId: 't1',
+				playlistUrl: 'https://cdn.example.com/index.m3u8',
+				maxBytes: 100,
+			}),
+		).toEqual({
+			kind: 'assemble-hls',
+			taskId: 't1',
+			playlistUrl: 'https://cdn.example.com/index.m3u8',
+			maxBytes: 100,
+		});
+	});
+
+	it('中止と解放を通す', () => {
+		expect(parseAssemblyCommand({ kind: 'cancel-assembly', taskId: 't1' })).toEqual({
+			kind: 'cancel-assembly',
+			taskId: 't1',
+		});
+		expect(parseAssemblyCommand({ kind: 'release-object-url', objectUrl: 'blob:x' })).toEqual({
+			kind: 'release-object-url',
+			objectUrl: 'blob:x',
+		});
+	});
+
+	it('形が合わないものは破棄する', () => {
+		expect(parseAssemblyCommand(undefined)).toBeUndefined();
+		expect(parseAssemblyCommand({ kind: 'assemble-hls', taskId: 't1' })).toBeUndefined();
+		expect(
+			parseAssemblyCommand({ kind: 'assemble-hls', taskId: 't1', playlistUrl: 'https://a' }),
+		).toBeUndefined();
+		expect(parseAssemblyCommand({ kind: 'cancel-assembly' })).toBeUndefined();
+		expect(parseAssemblyCommand({ kind: 'release-object-url' })).toBeUndefined();
+		expect(parseAssemblyCommand({ kind: 'unknown' })).toBeUndefined();
 	});
 });
