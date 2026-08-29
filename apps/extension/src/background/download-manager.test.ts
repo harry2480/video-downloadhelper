@@ -84,12 +84,13 @@ function createHarness() {
 
 	const broadcasts: { tabId: number; tasks: DownloadTask[] }[] = [];
 	let seq = 0;
+	let time = 1_000;
 	const manager = new DownloadManager(
 		downloader,
 		taskRepository,
 		registry,
 		(tabId, tasks) => broadcasts.push({ tabId, tasks }),
-		() => 1_000 + seq,
+		() => time,
 		() => `task-${++seq}`,
 	);
 
@@ -107,6 +108,13 @@ function createHarness() {
 		},
 		setSnapshots(next: DownloadSnapshot[]) {
 			snapshots = next;
+		},
+		advance(ms: number) {
+			time += ms;
+		},
+		/** Service Worker が依頼の途中で止まった状態を作る */
+		strandTask() {
+			stored = stored.map((task) => ({ ...task, status: 'queued' as const }));
 		},
 		async detect(sourceUrl: string, overrides: Partial<DetectionInput> = {}) {
 			await registry.register(input(sourceUrl, overrides), registry.currentGeneration(TAB_ID));
@@ -160,6 +168,20 @@ describe('start', () => {
 
 		expect(harness.started[0]?.url).toBe('https://cdn.example.com/720.mp4');
 		expect(harness.tasks[0]?.filename).toBe('サンプル動画_720p.mp4');
+	});
+
+	it('品質 URL のスキームが不正なら取得しない', async () => {
+		// マニフェスト由来の URL は検出時の関門を通っていない
+		const harness = createHarness();
+		const media = await harness.detect(MP4_URL);
+		await harness.enrich(media.dedupeKey, {
+			variants: [{ id: 'v0', url: 'file:///etc/passwd', height: 1080 }],
+		});
+
+		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v0' });
+
+		expect(harness.started).toHaveLength(0);
+		expect(harness.tasks[0]?.status).toBe('failed');
 	});
 
 	it('DRM 保護されたメディアは保存しない', async () => {
@@ -267,6 +289,36 @@ describe('進捗の取り込み', () => {
 		await harness.manager.refresh();
 
 		expect(harness.broadcasts).toHaveLength(0);
+	});
+
+	it('履歴から消されたダウンロードを進行中のまま残さない', async () => {
+		const harness = createHarness();
+		const media = await harness.detect(MP4_URL);
+		await harness.manager.start(TAB_ID, { mediaId: media.id });
+
+		// 問い合わせても返らない状態にする
+		harness.setSnapshots([]);
+		await harness.manager.refresh();
+
+		expect(harness.tasks[0]).toMatchObject({
+			status: 'failed',
+			error: expect.stringContaining('取得できなくなりました'),
+		});
+	});
+
+	it('依頼できないまま残ったタスクを一定時間で諦める', async () => {
+		// 依頼の直前に Service Worker が停止すると browserDownloadId を持たない
+		// タスクが残る。問い合わせ対象にならないので放置すると 0% で固まる
+		const harness = createHarness();
+		const media = await harness.detect(MP4_URL);
+		harness.failStart({ reason: 'unknown', detail: 'stopped' });
+		await harness.manager.start(TAB_ID, { mediaId: media.id });
+		harness.strandTask();
+
+		harness.advance(60_000);
+		await harness.manager.refresh();
+
+		expect(harness.tasks[0]?.status).toBe('failed');
 	});
 
 	it('拡張機能と無関係なダウンロードの通知は無視する', async () => {

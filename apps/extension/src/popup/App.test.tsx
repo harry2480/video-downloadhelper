@@ -391,12 +391,16 @@ describe('ダウンロード', () => {
 		expect(port.sent).toContainEqual({ kind: 'retry-download', taskId: 'task-1' });
 	});
 
-	it('完了したら保存済みと表示する', async () => {
+	it('完了したら保存済みと表示し、もう一度保存できる', async () => {
+		const user = userEvent.setup();
 		const port = renderApp();
 		port.emit({ kind: 'media-list', media: [media()], blocked: false });
 		port.emit({ kind: 'download-updated', tasks: [task({ status: 'completed', progress: 100 })] });
 
 		expect(await screen.findByText('保存しました')).toBeInTheDocument();
+
+		await user.click(screen.getByRole('button', { name: 'もう一度保存' }));
+		expect(port.sent).toContainEqual({ kind: 'retry-download', taskId: 'task-1' });
 	});
 
 	it('HLS には保存ボタンを出さない', async () => {

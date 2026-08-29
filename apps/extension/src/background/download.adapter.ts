@@ -8,8 +8,14 @@ import { err, ok } from '../shared/utils';
  * （ワンクリック保存。要件定義 2.5）。
  */
 
-/** ファイル名が拒否されたときにブラウザが返すメッセージの断片。 */
-const FILENAME_ERROR = 'filename';
+/**
+ * 失敗の分類に使うメッセージの断片。
+ *
+ * Promise 版の `chrome.downloads.download` は失敗時に reject し、
+ * `chrome.runtime.lastError` は設定されない。分類はメッセージから行う。
+ */
+const FILENAME_ERROR = /filename/i;
+const DENIED_ERROR = /blocked|forbidden|denied|not allowed/i;
 
 function toSnapshot(item: chrome.downloads.DownloadItem): DownloadSnapshot {
 	// totalBytes は不明なとき 0 が入る。0 のまま進捗率を出すと常に 0% になるため、
@@ -42,18 +48,15 @@ export function createDownloader(): DownloaderPort {
 					saveAs: false,
 				});
 
-				// 開始できなかった場合 undefined が返り、詳細は lastError にだけ載る
-				if (downloadId === undefined) {
-					const detail = chrome.runtime.lastError?.message ?? '';
-					return err(
-						detail.includes(FILENAME_ERROR) ? { reason: 'invalid-filename' } : { reason: 'denied' },
-					);
-				}
-
 				return ok(downloadId);
 			} catch (error) {
 				const detail = String(error);
-				if (detail.includes(FILENAME_ERROR)) return err({ reason: 'invalid-filename' });
+
+				// **この文字列をユーザーへは出さない。** URL も出さない（要件定義 12 章）
+				console.warn('[vdh] ダウンロードを開始できませんでした');
+
+				if (FILENAME_ERROR.test(detail)) return err({ reason: 'invalid-filename' });
+				if (DENIED_ERROR.test(detail)) return err({ reason: 'denied' });
 				return err({ reason: 'unknown', detail });
 			}
 		},

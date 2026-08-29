@@ -147,6 +147,7 @@ describe('状態の遷移', () => {
 			error: '通信に失敗しました',
 			progress: 40,
 			downloadedBytes: 400,
+			totalBytes: 1_000,
 			variantId: 'v1',
 		});
 
@@ -162,6 +163,8 @@ describe('状態の遷移', () => {
 		expect(restarted).not.toHaveProperty('error');
 		expect(restarted).not.toHaveProperty('browserDownloadId');
 		expect(restarted).not.toHaveProperty('downloadedBytes');
+		// 総量を残すと、再試行先が Content-Length を返さないとき前回の値で割ってしまう
+		expect(restarted).not.toHaveProperty('totalBytes');
 	});
 
 	it('進行中と終了済みを区別する', () => {

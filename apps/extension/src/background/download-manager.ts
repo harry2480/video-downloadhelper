@@ -1,3 +1,4 @@
+import { downloadRejectionReason, resolveDownloadUrl } from '../media/downloadable';
 import {
 	applyDownloadSnapshot,
 	isActive,
@@ -6,7 +7,7 @@ import {
 	resetDownloadTask,
 } from '../processor/download-task';
 import { buildFilename } from '../processor/filename';
-import type { DownloaderPort } from '../shared/ports/download.port';
+import type { DownloadStartFailure, DownloaderPort } from '../shared/ports/download.port';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';
 import type { DetectedMedia, DownloadRequest, DownloadTask, MediaVariant } from '../shared/types';
 import type { MediaRegistry } from './media-registry';
@@ -25,15 +26,19 @@ import type { MediaRegistry } from './media-registry';
 /** 保持するタスク数の上限。超えたら終了済みの古いものから捨てる。 */
 const MAX_TASKS = 100;
 
-const DRM_REJECTED = 'DRM で保護されているため保存できません';
-const NOT_DOWNLOADABLE = 'この形式の保存にはまだ対応していません';
+/**
+ * 開始したまま動かないタスクを諦めるまでの時間（ms）。
+ *
+ * ブラウザへ依頼する前に Service Worker が停止すると、`browserDownloadId` を
+ * 持たないタスクが残る。問い合わせ対象にならないため放置すると 0% で固まる。
+ */
+const STALE_QUEUED_MS = 60_000;
+
 const MEDIA_GONE = 'メディアが見つかりませんでした（ページを再読み込みしてください）';
+const LOST = 'ダウンロードの状況を取得できなくなりました';
 const START_FAILED = 'ダウンロードを開始できませんでした';
 const INVALID_FILENAME = 'ファイル名が受け付けられませんでした';
 const DENIED = 'ブラウザにダウンロードを拒否されました';
-
-/** Phase 1 で直接保存できる形式。 */
-const DOWNLOADABLE_TYPES = new Set(['direct', 'audio']);
 
 export class DownloadManager {
 	/**
@@ -71,16 +76,16 @@ export class DownloadManager {
 			const variant = findVariant(media, request.variantId);
 			const task = this.createTask(tabId, request, media, variant);
 
-			const rejection = rejectionReason(media);
-			if (rejection !== undefined) {
-				await this.commit([markDownloadFailed(task, rejection), ...tasks], tabId);
+			const target = media === undefined ? undefined : resolveDownloadUrl(media, variant);
+			const rejection = media === undefined ? MEDIA_GONE : downloadRejectionReason(media, variant);
+
+			if (rejection !== undefined || target === undefined) {
+				await this.commit([markDownloadFailed(task, rejection ?? MEDIA_GONE), ...tasks], tabId);
 				return;
 			}
-			// rejectionReason が undefined を返した時点でメディアは存在する
-			if (media === undefined) return;
 
 			await this.commit([task, ...tasks], tabId);
-			await this.begin(task, variant?.url ?? media.sourceUrl);
+			await this.begin(task, target);
 		});
 	}
 
@@ -111,16 +116,20 @@ export class DownloadManager {
 			);
 			const variant = findVariant(media, target.variantId);
 
-			const rejection = rejectionReason(media);
-			if (rejection !== undefined) {
-				await this.commit(replace(tasks, markDownloadFailed(target, rejection)), target.tabId);
+			const url = media === undefined ? undefined : resolveDownloadUrl(media, variant);
+			const rejection = media === undefined ? MEDIA_GONE : downloadRejectionReason(media, variant);
+
+			if (rejection !== undefined || url === undefined) {
+				await this.commit(
+					replace(tasks, markDownloadFailed(target, rejection ?? MEDIA_GONE)),
+					target.tabId,
+				);
 				return;
 			}
-			if (media === undefined) return;
 
 			const restarted = resetDownloadTask(target, this.now());
 			await this.commit(replace(tasks, restarted), restarted.tabId);
-			await this.begin(restarted, variant?.url ?? media.sourceUrl);
+			await this.begin(restarted, url);
 		});
 	}
 
@@ -132,12 +141,41 @@ export class DownloadManager {
 	 */
 	async refresh(): Promise<void> {
 		await this.enqueue(async () => {
-			const tasks = await this.repository.findAll();
-			const ids = tasks.filter(isActive).flatMap(toBrowserId);
-			if (ids.length === 0) return;
+			const swept = this.sweepStale(await this.repository.findAll());
+			const ids = swept.tasks.filter(isActive).flatMap(toBrowserId);
 
-			await this.applySnapshots(tasks, ids);
+			if (ids.length === 0) {
+				if (swept.changed) await this.saveAndNotify(swept.tasks, swept.changedTabs);
+				return;
+			}
+
+			await this.applySnapshots(swept.tasks, ids, swept.changedTabs);
 		});
+	}
+
+	/**
+	 * ブラウザへ依頼できないまま残ったタスクを諦める。
+	 *
+	 * 依頼の直前に Service Worker が停止すると `browserDownloadId` を持たない
+	 * アクティブなタスクが残り、問い合わせ対象にならないので永久に 0% で固まる。
+	 */
+	private sweepStale(tasks: DownloadTask[]): {
+		tasks: DownloadTask[];
+		changed: boolean;
+		changedTabs: Set<number>;
+	} {
+		const changedTabs = new Set<number>();
+		const now = this.now();
+
+		const next = tasks.map((task) => {
+			if (!isActive(task) || task.browserDownloadId !== undefined) return task;
+			if (now - task.startedAt < STALE_QUEUED_MS) return task;
+
+			changedTabs.add(task.tabId);
+			return markDownloadFailed(task, START_FAILED);
+		});
+
+		return { tasks: next, changed: changedTabs.size > 0, changedTabs };
 	}
 
 	/** ブラウザ側の状態変化を取り込む。完了・中断はここで届く。 */
@@ -149,11 +187,15 @@ export class DownloadManager {
 			// 拡張機能と無関係なダウンロードの通知も届く
 			if (!known) return;
 
-			await this.applySnapshots(tasks, [downloadId]);
+			await this.applySnapshots(tasks, [downloadId], new Set());
 		});
 	}
 
-	/** タブが閉じられたときに呼ぶ。進行中の取得は残さない。 */
+	/**
+	 * タブが閉じられたときに呼ぶ。当該タブのタスクを一覧から外す。
+	 *
+	 * ブラウザ側の保存は止めない。ページの寿命とは独立して進むため。
+	 */
 	async forgetTab(tabId: number): Promise<void> {
 		await this.enqueue(async () => {
 			const tasks = await this.repository.findAll();
@@ -189,7 +231,8 @@ export class DownloadManager {
 		const started = await this.downloader.start({ url, filename: task.filename });
 		const tasks = await this.repository.findAll();
 
-		// 依頼している間にキャンセルされていることがある
+		// キューの中で実行されるため、依頼中に他の操作は割り込まない。
+		// ただし依頼が返るまでキューを占有する点は意識しておくこと
 		const current = tasks.find((item) => item.id === task.id);
 		if (current === undefined || !isActive(current)) return;
 
@@ -208,26 +251,41 @@ export class DownloadManager {
 	}
 
 	/** 問い合わせた現況をタスクへ反映し、変化があれば保存して通知する。 */
-	private async applySnapshots(tasks: DownloadTask[], ids: number[]): Promise<void> {
+	private async applySnapshots(
+		tasks: DownloadTask[],
+		ids: number[],
+		changedTabs: Set<number>,
+	): Promise<void> {
 		const snapshots = await this.downloader.query(ids);
-		if (snapshots.length === 0) return;
 
-		const changedTabs = new Set<number>();
 		const next = tasks.map((task) => {
-			const snapshot = snapshots.find((item) => item.downloadId === task.browserDownloadId);
-			if (snapshot === undefined) return task;
+			const id = task.browserDownloadId;
+			if (id === undefined || !ids.includes(id)) return task;
 
-			const updated = applyDownloadSnapshot(task, snapshot);
+			const snapshot = snapshots.find((item) => item.downloadId === id);
+
+			// 問い合わせても返らない＝履歴から消された。進行中のまま残さない
+			const updated =
+				snapshot === undefined
+					? isActive(task)
+						? markDownloadFailed(task, LOST)
+						: task
+					: applyDownloadSnapshot(task, snapshot);
+
 			if (!hasChanged(task, updated)) return task;
 
 			changedTabs.add(task.tabId);
 			return updated;
 		});
 
+		await this.saveAndNotify(next, changedTabs);
+	}
+
+	private async saveAndNotify(tasks: DownloadTask[], changedTabs: Set<number>): Promise<void> {
 		if (changedTabs.size === 0) return;
 
-		await this.repository.saveAll(next);
-		for (const tabId of changedTabs) this.onTasksChanged(tabId, forTab(next, tabId));
+		await this.repository.saveAll(tasks);
+		for (const tabId of changedTabs) this.onTasksChanged(tabId, forTab(tasks, tabId));
 	}
 
 	/** 保存して当該タブへ通知する。 */
@@ -273,19 +331,15 @@ function findVariant(
 	return media.variants?.find((variant) => variant.id === variantId);
 }
 
-/** 保存できない理由。保存してよければ `undefined`。 */
-function rejectionReason(media: DetectedMedia | undefined): string | undefined {
-	if (media === undefined) return MEDIA_GONE;
-	if (media.drm === true) return DRM_REJECTED;
-	if (media.unsupportedReason !== undefined) return media.unsupportedReason;
-	if (!DOWNLOADABLE_TYPES.has(media.type)) return NOT_DOWNLOADABLE;
-	return undefined;
-}
-
-function describe(failure: { reason: string }): string {
-	if (failure.reason === 'invalid-filename') return INVALID_FILENAME;
-	if (failure.reason === 'denied') return DENIED;
-	return START_FAILED;
+function describe(failure: DownloadStartFailure): string {
+	switch (failure.reason) {
+		case 'invalid-filename':
+			return INVALID_FILENAME;
+		case 'denied':
+			return DENIED;
+		default:
+			return START_FAILED;
+	}
 }
 
 /** 表示に影響する値が変わったか。変わっていなければ保存も通知もしない。 */

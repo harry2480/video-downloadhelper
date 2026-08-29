@@ -108,9 +108,20 @@ export function markDownloadCancelled(task: DownloadTask): DownloadTask {
 	return { ...task, status: 'cancelled' };
 }
 
-/** 再試行のために開始前の状態へ戻す。ファイル名と選択品質は引き継ぐ。 */
+/**
+ * 再試行のために開始前の状態へ戻す。ファイル名と選択品質は引き継ぐ。
+ *
+ * **総バイト数も落とす。** 残すと、再試行先が Content-Length を返さない場合に
+ * 前回の総量で割った進捗が出る（小さいファイルなら即 100% になる）。
+ */
 export function resetDownloadTask(task: DownloadTask, startedAt: number): DownloadTask {
-	const { error: _error, browserDownloadId: _id, downloadedBytes: _bytes, ...rest } = task;
+	const {
+		error: _error,
+		browserDownloadId: _id,
+		downloadedBytes: _bytes,
+		totalBytes: _total,
+		...rest
+	} = task;
 	return { ...rest, status: 'queued', progress: 0, startedAt };
 }
 

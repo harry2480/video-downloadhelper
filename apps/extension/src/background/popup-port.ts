@@ -87,21 +87,56 @@ export function registerPopupPort(
 		}
 		if (port.name !== POPUP_PORT_NAME) return;
 
+		// **ポップアップの URL であることまで確かめる。** 拡張機能の ID を名乗れるのは
+		// ポップアップだけではない（Content Script も同じ ID で届く）
+		const senderUrl = port.sender?.url ?? '';
+		if (!senderUrl.startsWith(chrome.runtime.getURL('src/popup/'))) {
+			port.disconnect();
+			return;
+		}
+
+		// **切断の購読は同期的に行う。** アクティブタブの解決を待つ間に
+		// ポップアップが閉じられると、後から登録したリスナーはもう呼ばれず、
+		// 進捗ポーリングを止められなくなる
+		const connection: Connection = { port, closed: false };
+		port.onDisconnect.addListener(() => {
+			connection.closed = true;
+			closeConnection(connection);
+		});
+
 		fireAndForget(
-			attachSubscriber(registry, resolver, downloads, port),
+			attachSubscriber(registry, resolver, downloads, connection),
 			'ポップアップへの状態配信',
 		);
 	});
+}
+
+/** 接続 1 本ぶんの後始末をまとめる。 */
+type Connection = {
+	port: chrome.runtime.Port;
+	closed: boolean;
+	subscriber?: Subscriber;
+	poll?: ReturnType<typeof setInterval>;
+};
+
+function closeConnection(connection: Connection): void {
+	if (connection.subscriber !== undefined) subscribers.delete(connection.subscriber);
+	if (connection.poll !== undefined) clearInterval(connection.poll);
+	connection.poll = undefined;
 }
 
 async function attachSubscriber(
 	registry: MediaRegistry,
 	resolver: ManifestResolver,
 	downloads: DownloadManager,
-	port: chrome.runtime.Port,
+	connection: Connection,
 ): Promise<void> {
+	const port = connection.port;
 	const tab = await resolveActiveTab();
 	const tabId = tab?.id;
+
+	// 解決を待つ間に閉じられていたら、購読もタイマーも作らない
+	if (connection.closed) return;
 
 	if (tabId === undefined || tabId < 0) {
 		postMediaList(port, [], false);
@@ -111,16 +146,12 @@ async function attachSubscriber(
 	const blocked = tab?.url !== undefined && isBlockedUrl(tab.url);
 	const subscriber: Subscriber = { port, tabId };
 	subscribers.add(subscriber);
+	connection.subscriber = subscriber;
 
 	// 進捗はポップアップが開いている間だけ取り込む
-	const poll = setInterval(() => {
+	connection.poll = setInterval(() => {
 		fireAndForget(downloads.refresh(), 'ダウンロード進捗の取り込み');
 	}, PROGRESS_POLL_MS);
-
-	port.onDisconnect.addListener(() => {
-		subscribers.delete(subscriber);
-		clearInterval(poll);
-	});
 
 	port.onMessage.addListener((raw: unknown) => {
 		const message = parsePopupMessage(raw);

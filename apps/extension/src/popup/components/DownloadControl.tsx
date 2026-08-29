@@ -1,3 +1,4 @@
+import { isDownloadable, isPendingSupport } from '../../media/downloadable';
 import { formatBytes } from '../../media/format';
 import type { DetectedMedia, DownloadRequest, DownloadTask } from '../../shared/types';
 import { Button } from './ui/Button';
@@ -19,9 +20,6 @@ type Props = {
 	onRetry: (taskId: string) => void;
 };
 
-/** Phase 1 で直接保存できる形式。HLS / DASH はセグメント結合の実装後に対応する。 */
-const DOWNLOADABLE_TYPES = new Set(['direct', 'audio']);
-
 /** 取得中に出す進捗の説明。総バイト数を返さないサーバーがあるため分岐する。 */
 function progressLabel(task: DownloadTask): string {
 	const received = formatBytes(task.downloadedBytes);
@@ -35,13 +33,13 @@ function progressLabel(task: DownloadTask): string {
 }
 
 export function DownloadControl({ media, variantId, task, onDownload, onCancel, onRetry }: Props) {
-	// DRM・対応外の理由は MediaItem 側で表示済み。操作は出さない
-	if (media.drm === true) return null;
-	if (media.unsupportedReason !== undefined) return null;
-
-	if (!DOWNLOADABLE_TYPES.has(media.type)) {
+	// まだ対応していない形式は、押せるのに保存できないボタンを出さずに理由を書く
+	if (isPendingSupport(media)) {
 		return <p className="text-muted text-xs">この形式の保存は準備中です</p>;
 	}
+
+	// DRM・対応外の理由・保存できない URL は MediaItem 側で表示済み。操作は出さない
+	if (!isDownloadable(media)) return null;
 
 	if (
 		task?.status === 'queued' ||
@@ -62,7 +60,14 @@ export function DownloadControl({ media, variantId, task, onDownload, onCancel, 
 	}
 
 	if (task?.status === 'completed') {
-		return <p className="text-muted text-xs">保存しました</p>;
+		return (
+			<div className="flex items-center justify-between gap-2">
+				<span className="text-muted text-xs">保存しました</span>
+				<Button variant="ghost" onClick={() => onRetry(task.id)}>
+					もう一度保存
+				</Button>
+			</div>
+		);
 	}
 
 	if (task?.status === 'failed' || task?.status === 'cancelled') {
