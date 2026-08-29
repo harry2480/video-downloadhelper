@@ -66,7 +66,6 @@ describe('直接メディアの保存', () => {
 
 		savedFiles.push(completed.filename);
 
-		expect(completed.filename).toMatch(/\.mp4$/);
 		expect(completed.bytesReceived).toBe(EXPECTED_BYTES.byteLength);
 
 		// ファイルの中身まで確認する。状態だけ見ても中身が空のことがある
@@ -77,6 +76,11 @@ describe('直接メディアの保存', () => {
 		// 進捗は storage 側に残る。Service Worker が止まっても復元できる形
 		const tasks = await readStoredTasks(harness);
 		expect(tasks?.[0]).toMatchObject({ tabId, status: 'completed', progress: 100 });
+
+		// **ファイル名はディスク上ではなくタスク側で確かめる。**
+		// Playwright は CDP の `allowAndName` でダウンロードを受け取るため、
+		// 保存名が GUID へ置き換わり、拡張機能が要求した名前はディスクに現れない
+		expect(tasks?.[0]?.filename).toMatch(/\.mp4$/);
 
 		await popup.close();
 		await contentPage.close();
