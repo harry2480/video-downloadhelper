@@ -70,8 +70,7 @@ describe('直接メディアの保存', () => {
 
 		// ファイルの中身まで確認する。状態だけ見ても中身が空のことがある
 		const saved = await readFile(completed.filename);
-		expect(saved.byteLength).toBe(EXPECTED_BYTES.byteLength);
-		expect(saved.subarray(0, 8)).toEqual(EXPECTED_BYTES.subarray(0, 8));
+		expect(saved).toEqual(EXPECTED_BYTES);
 
 		// 進捗は storage 側に残る。Service Worker が止まっても復元できる形
 		const tasks = await readStoredTasks(harness);

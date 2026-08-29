@@ -412,6 +412,26 @@ describe('ダウンロード', () => {
 		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
 	});
 
+	it('選択中の品質が保存できないなら保存ボタンを出さない', async () => {
+		// 品質ごとに URL が違う。メディア全体だけを見ると、押した瞬間に失敗する
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [
+				media({
+					variants: [
+						{ id: 'v0', url: 'file:///etc/passwd', height: 1080 },
+						{ id: 'v1', url: 'https://cdn.example.com/720.mp4', height: 720 },
+					],
+				}),
+			],
+			blocked: false,
+		});
+
+		await screen.findByRole('list', { name: '検出したメディア' });
+		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+	});
+
 	it('DRM 保護されたメディアには操作を出さない', async () => {
 		const port = renderApp();
 		port.emit({ kind: 'media-list', media: [media({ drm: true })], blocked: false });

@@ -38,8 +38,12 @@ export function DownloadControl({ media, variantId, task, onDownload, onCancel, 
 		return <p className="text-muted text-xs">この形式の保存は準備中です</p>;
 	}
 
+	// **選択中の品質で判定する。** 品質ごとに URL が違うため、メディア全体だけを
+	// 見ると「保存」を出したのに Background が失敗タスクを作る組み合わせが出る
+	const variant = media.variants?.find((item) => item.id === variantId);
+
 	// DRM・対応外の理由・保存できない URL は MediaItem 側で表示済み。操作は出さない
-	if (!isDownloadable(media)) return null;
+	if (!isDownloadable(media, variant)) return null;
 
 	if (
 		task?.status === 'queued' ||

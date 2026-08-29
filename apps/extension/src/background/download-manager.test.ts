@@ -109,6 +109,10 @@ function createHarness() {
 		setSnapshots(next: DownloadSnapshot[]) {
 			snapshots = next;
 		},
+		/** 既存のタスクを直接置く。上限まわりの検証に使う */
+		seedTasks(next: DownloadTask[]) {
+			stored = [...next];
+		},
 		advance(ms: number) {
 			time += ms;
 		},
@@ -435,6 +439,30 @@ describe('タブ単位の扱い', () => {
 
 		expect(harness.tasks).toHaveLength(0);
 		expect(harness.broadcasts.at(-1)).toEqual({ tabId: TAB_ID, tasks: [] });
+	});
+
+	it('上限超過で捨てたタスクのタブへも通知する', async () => {
+		// 捨てられた側のタブでポップアップが開いていると、消えたはずのタスクを
+		// 表示し続けてしまう
+		const OTHER_TAB = 2;
+		const harness = createHarness();
+		harness.seedTasks(
+			Array.from({ length: 100 }, (_, index) => ({
+				id: `old-${index}`,
+				mediaId: `2:https://cdn.example.com/${index}.mp4`,
+				tabId: OTHER_TAB,
+				filename: `${index}.mp4`,
+				status: 'completed' as const,
+				progress: 100,
+				startedAt: 10 + index,
+			})),
+		);
+
+		const media = await harness.detect(MP4_URL);
+		await harness.manager.start(TAB_ID, { mediaId: media.id });
+
+		expect(harness.tasks).toHaveLength(100);
+		expect(harness.broadcasts.map((entry) => entry.tabId)).toContain(OTHER_TAB);
 	});
 
 	it('関係のないタブを閉じても通知しない', async () => {

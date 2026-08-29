@@ -288,11 +288,23 @@ export class DownloadManager {
 		for (const tabId of changedTabs) this.onTasksChanged(tabId, forTab(tasks, tabId));
 	}
 
-	/** 保存して当該タブへ通知する。 */
+	/**
+	 * 保存して通知する。
+	 *
+	 * 上限超過で捨てたタスクのタブへも通知する。捨てられた側のタブで
+	 * ポップアップが開いていると、消えたはずのタスクを表示し続けるため。
+	 */
 	private async commit(tasks: DownloadTask[], tabId: number): Promise<void> {
 		const capped = capTasks(tasks);
+
+		const kept = new Set(capped.map((task) => task.id));
+		const changedTabs = new Set([tabId]);
+		for (const task of tasks) {
+			if (!kept.has(task.id)) changedTabs.add(task.tabId);
+		}
+
 		await this.repository.saveAll(capped);
-		this.onTasksChanged(tabId, forTab(capped, tabId));
+		for (const changed of changedTabs) this.onTasksChanged(changed, forTab(capped, changed));
 	}
 
 	/**
