@@ -1,6 +1,7 @@
 import {
 	type DetectionInput,
 	applyManifestAnalysis,
+	applyManifestFailure,
 	createDetectedMedia,
 	upsertDetectedMedia,
 } from '../media/detected-media.model';
@@ -107,6 +108,36 @@ export class MediaRegistry {
 		generation: number,
 		analysis: Parameters<typeof applyManifestAnalysis>[1],
 	): Promise<void> {
+		await this.mutate(tabId, dedupeKey, generation, (media) =>
+			applyManifestAnalysis(media, analysis),
+		);
+	}
+
+	/**
+	 * マニフェストの取得失敗を記録する。
+	 *
+	 * `enrich` と違い解析済みにはしない。再試行の契機を残すため（`ManifestResolver` を参照）。
+	 */
+	async recordManifestFailure(
+		tabId: number,
+		dedupeKey: string,
+		generation: number,
+		reason: string,
+	): Promise<void> {
+		await this.mutate(tabId, dedupeKey, generation, (media) => applyManifestFailure(media, reason));
+	}
+
+	/**
+	 * dedupeKey が一致する 1 件を差し替える。
+	 *
+	 * 世代はキューへ入る前と保存の直前の 2 回突き合わせる。順番待ちの間にも遷移し得るため。
+	 */
+	private async mutate(
+		tabId: number,
+		dedupeKey: string,
+		generation: number,
+		transform: (media: DetectedMedia) => DetectedMedia,
+	): Promise<void> {
 		if (generation !== this.currentGeneration(tabId)) return;
 
 		await this.enqueue(tabId, async () => {
@@ -118,7 +149,7 @@ export class MediaRegistry {
 			if (target === undefined) return;
 
 			const next = [...current];
-			next[index] = applyManifestAnalysis(target, analysis);
+			next[index] = transform(target);
 
 			await this.repository.saveForTab(tabId, next);
 			this.onTabChanged(tabId, next);

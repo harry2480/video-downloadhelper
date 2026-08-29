@@ -7,6 +7,7 @@ import {
 } from '../shared/messages';
 import type { DetectedMedia } from '../shared/types';
 import { fireAndForget } from './fire-and-forget';
+import type { ManifestResolver } from './manifest-resolver';
 import type { MediaRegistry } from './media-registry';
 
 /**
@@ -53,7 +54,7 @@ export function broadcastToPopups(tabId: number, media: DetectedMedia[]): void {
 	}
 }
 
-export function registerPopupPort(registry: MediaRegistry): void {
+export function registerPopupPort(registry: MediaRegistry, resolver: ManifestResolver): void {
 	chrome.runtime.onConnect.addListener((port) => {
 		// 送信元を検証する。外部から接続できないようにするための防壁
 		if (port.sender?.id !== chrome.runtime.id) {
@@ -62,11 +63,15 @@ export function registerPopupPort(registry: MediaRegistry): void {
 		}
 		if (port.name !== POPUP_PORT_NAME) return;
 
-		fireAndForget(attachSubscriber(registry, port), 'ポップアップへの状態配信');
+		fireAndForget(attachSubscriber(registry, resolver, port), 'ポップアップへの状態配信');
 	});
 }
 
-async function attachSubscriber(registry: MediaRegistry, port: chrome.runtime.Port): Promise<void> {
+async function attachSubscriber(
+	registry: MediaRegistry,
+	resolver: ManifestResolver,
+	port: chrome.runtime.Port,
+): Promise<void> {
 	const tab = await resolveActiveTab();
 	const tabId = tab?.id;
 
@@ -86,9 +91,33 @@ async function attachSubscriber(registry: MediaRegistry, port: chrome.runtime.Po
 	port.onMessage.addListener((message: PopupToBackground) => {
 		if (message?.kind !== 'rescan') return;
 		fireAndForget(requestRescan(tabId), '再スキャンの要求');
+
+		// 明示的な再試行。取得に失敗していた項目をもう一度取りに行く
+		resolver.resetFailures(tabId);
+		fireAndForget(resolvePending(registry, resolver, tabId), 'マニフェストの解析');
 	});
 
 	postMediaList(port, blocked ? [] : await registry.list(tabId), blocked);
+
+	if (blocked) return;
+
+	// **ここが Service Worker 再起動後の唯一の再開契機になる。**
+	// 解析は検出結果の変化からしか始まらないが、読み込みの終わったページでは
+	// もうメディアリクエストが起きない。ポップアップを開いた時点で拾い直さないと
+	// 「画質を確認しています…」のまま止まる
+	fireAndForget(resolvePending(registry, resolver, tabId), 'マニフェストの解析');
+}
+
+/** 現在の検出結果のうち未解析の HLS を解析する。 */
+async function resolvePending(
+	registry: MediaRegistry,
+	resolver: ManifestResolver,
+	tabId: number,
+): Promise<void> {
+	// 世代は一覧を読む前に取る。読んでいる間に遷移すると、旧ページの検出結果を
+	// 遷移後の世代で解析してしまう
+	const generation = registry.currentGeneration(tabId);
+	await resolver.resolvePending(tabId, await registry.list(tabId), generation);
 }
 
 /**
