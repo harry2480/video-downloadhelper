@@ -49,9 +49,11 @@ export function MediaItem({ media }: { media: DetectedMedia }) {
 					<p className="text-danger text-xs">{unsupportedReason}</p>
 				)}
 
-				{media.type === 'hls' && media.manifestResolved !== true && (
-					<p className="text-muted text-xs">画質を確認しています…</p>
-				)}
+				{media.type === 'hls' &&
+					media.manifestResolved !== true &&
+					unsupportedReason === undefined && (
+						<p className="text-muted text-xs">画質を確認しています…</p>
+					)}
 
 				{variants.length > 1 && effectiveVariantId !== undefined && (
 					<QualitySelector

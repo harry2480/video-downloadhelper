@@ -4,6 +4,7 @@ import {
 	type DetectionInput,
 	type DetectionRejection,
 	applyManifestAnalysis,
+	applyManifestFailure,
 	createDetectedMedia,
 	mergeDetectedMedia,
 	upsertDetectedMedia,
@@ -191,6 +192,29 @@ describe('applyManifestAnalysis', () => {
 		applyManifestAnalysis(original, { duration: 600 });
 
 		expect(original).not.toHaveProperty('manifestResolved');
+	});
+
+	it('前回の対応外の理由を残さない', () => {
+		// 取得に失敗した後で成功したとき、古い失敗理由が居座らないようにする
+		const failed = applyManifestFailure(create(), '取得できませんでした');
+
+		expect(applyManifestAnalysis(failed, {})).not.toHaveProperty('unsupportedReason');
+	});
+});
+
+describe('applyManifestFailure', () => {
+	it('理由を記録するが解析済みにはしない', () => {
+		const failed = applyManifestFailure(create(), '取得できませんでした');
+
+		expect(failed.unsupportedReason).toBe('取得できませんでした');
+		expect(failed).not.toHaveProperty('manifestResolved');
+	});
+
+	it('元のオブジェクトを変更しない', () => {
+		const original = create();
+		applyManifestFailure(original, '取得できませんでした');
+
+		expect(original).not.toHaveProperty('unsupportedReason');
 	});
 });
 

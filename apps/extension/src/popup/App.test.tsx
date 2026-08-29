@@ -243,6 +243,19 @@ describe('マニフェスト解析の状態', () => {
 		expect(screen.queryByText(/画質を確認しています/)).not.toBeInTheDocument();
 	});
 
+	it('取得に失敗したら確認中ではなく理由を出す', async () => {
+		// 再試行のため解析済みにはしない。確認中と理由を同時に出さない
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [media({ type: 'hls', unsupportedReason: 'マニフェストを取得できませんでした' })],
+			blocked: false,
+		});
+
+		expect(await screen.findByText(/マニフェストを取得できませんでした/)).toBeInTheDocument();
+		expect(screen.queryByText(/画質を確認しています/)).not.toBeInTheDocument();
+	});
+
 	it('対応外の理由を表示する', async () => {
 		const port = renderApp();
 		port.emit({

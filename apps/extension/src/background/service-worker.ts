@@ -46,4 +46,4 @@ const resolver = new ManifestResolver(fetcher, registry);
 registerRequestDetector(registry);
 registerTabLifecycle(registry);
 registerMessageHandler(registry);
-registerPopupPort(registry);
+registerPopupPort(registry, resolver);
