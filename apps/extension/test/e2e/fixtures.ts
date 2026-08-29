@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,8 +13,30 @@ export type ExtensionContext = {
 	context: BrowserContext;
 	/** 起動ごとに変わるため、Service Worker の URL から動的に取得する */
 	extensionId: string;
+	/** `chrome.downloads` の保存先。テストごとに使い捨てる */
+	downloadDir: string;
 	close: () => Promise<void>;
 };
+
+/**
+ * プロファイルの設定へ保存先を書き込む。
+ *
+ * `chrome.downloads` の保存先はコマンドライン引数では変えられないため、
+ * 初回起動時に読まれる Preferences を用意しておく。実ユーザーの
+ * ダウンロードフォルダを汚さないために必要。
+ */
+async function seedDownloadPreferences(userDataDir: string, downloadDir: string): Promise<void> {
+	const profileDir = path.join(userDataDir, 'Default');
+	await mkdir(profileDir, { recursive: true });
+
+	const preferences = {
+		download: { default_directory: downloadDir, prompt_for_download: false },
+		savefile: { default_directory: downloadDir },
+		profile: { exit_type: 'Normal', exited_cleanly: true },
+	};
+
+	await writeFile(path.join(profileDir, 'Preferences'), JSON.stringify(preferences), 'utf8');
+}
 
 /**
  * 拡張機能をロードした Chrome を起動する。
@@ -26,8 +48,11 @@ export type ExtensionContext = {
  */
 export async function launchExtension(): Promise<ExtensionContext> {
 	const userDataDir = await mkdtemp(path.join(tmpdir(), 'vdh-e2e-'));
+	const downloadDir = await mkdtemp(path.join(tmpdir(), 'vdh-downloads-'));
+	await seedDownloadPreferences(userDataDir, downloadDir);
 
 	const context = await chromium.launchPersistentContext(userDataDir, {
+		downloadsPath: downloadDir,
 		channel: 'chromium',
 		args: [
 			`--disable-extensions-except=${DIST_PATH}`,
@@ -44,9 +69,11 @@ export async function launchExtension(): Promise<ExtensionContext> {
 	return {
 		context,
 		extensionId,
+		downloadDir,
 		close: async () => {
 			await context.close();
 			await rm(userDataDir, { recursive: true, force: true });
+			await rm(downloadDir, { recursive: true, force: true });
 		},
 	};
 }

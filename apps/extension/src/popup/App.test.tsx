@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BackgroundToPopup } from '../shared/messages';
-import type { DetectedMedia } from '../shared/types';
+import type { DetectedMedia, DownloadTask } from '../shared/types';
 import { App } from './App';
 
 /**
@@ -307,7 +307,7 @@ describe('購読の後始末', () => {
 });
 
 describe('キーボード操作', () => {
-	it('Tab だけで更新ボタンと詳細ボタンへ到達できる', async () => {
+	it('Tab だけで更新ボタンと保存ボタンと詳細ボタンへ到達できる', async () => {
 		const user = userEvent.setup();
 		const port = renderApp();
 		port.emit({ kind: 'media-list', media: [media()], blocked: false });
@@ -318,6 +318,137 @@ describe('キーボード操作', () => {
 		expect(screen.getByRole('button', { name: '再スキャン' })).toHaveFocus();
 
 		await user.tab();
+		expect(screen.getByRole('button', { name: '保存' })).toHaveFocus();
+
+		await user.tab();
 		expect(screen.getByRole('button', { name: '詳細' })).toHaveFocus();
+	});
+});
+
+describe('ダウンロード', () => {
+	function task(overrides: Partial<DownloadTask> = {}): DownloadTask {
+		return {
+			id: 'task-1',
+			mediaId: '1:https://cdn.example.com/v.mp4',
+			tabId: 1,
+			filename: 'video.mp4',
+			status: 'downloading',
+			progress: 0,
+			startedAt: 1_000,
+			...overrides,
+		};
+	}
+
+	it('保存ボタンを押すとダウンロードを要求する', async () => {
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media()], blocked: false });
+
+		await user.click(await screen.findByRole('button', { name: '保存' }));
+
+		expect(port.sent).toContainEqual({
+			kind: 'start-download',
+			request: { mediaId: '1:https://cdn.example.com/v.mp4' },
+		});
+	});
+
+	it('取得中は進捗と中止ボタンを出す', async () => {
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media()], blocked: false });
+		port.emit({
+			kind: 'download-updated',
+			tasks: [task({ progress: 42, downloadedBytes: 420, totalBytes: 1_000 })],
+		});
+
+		expect(await screen.findByRole('progressbar')).toHaveAttribute('aria-valuenow', '42');
+		expect(screen.getByRole('button', { name: '中止' })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+	});
+
+	it('中止ボタンを押すと中止を要求する', async () => {
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media()], blocked: false });
+		port.emit({ kind: 'download-updated', tasks: [task()] });
+
+		await user.click(await screen.findByRole('button', { name: '中止' }));
+
+		expect(port.sent).toContainEqual({ kind: 'cancel-download', taskId: 'task-1' });
+	});
+
+	it('失敗したら理由と再試行ボタンを出す', async () => {
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media()], blocked: false });
+		port.emit({
+			kind: 'download-updated',
+			tasks: [task({ status: 'failed', error: '通信に失敗しました' })],
+		});
+
+		expect(await screen.findByText('通信に失敗しました')).toBeInTheDocument();
+
+		await user.click(screen.getByRole('button', { name: '再試行' }));
+		expect(port.sent).toContainEqual({ kind: 'retry-download', taskId: 'task-1' });
+	});
+
+	it('完了したら保存済みと表示し、もう一度保存できる', async () => {
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media()], blocked: false });
+		port.emit({ kind: 'download-updated', tasks: [task({ status: 'completed', progress: 100 })] });
+
+		expect(await screen.findByText('保存しました')).toBeInTheDocument();
+
+		await user.click(screen.getByRole('button', { name: 'もう一度保存' }));
+		expect(port.sent).toContainEqual({ kind: 'retry-download', taskId: 'task-1' });
+	});
+
+	it('HLS には保存ボタンを出さない', async () => {
+		// Phase 1 はセグメント結合に未対応。押せるのに保存できない状態を作らない
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media({ type: 'hls' })], blocked: false });
+
+		expect(await screen.findByText(/準備中/)).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+	});
+
+	it('選択中の品質が保存できないなら保存ボタンを出さない', async () => {
+		// 品質ごとに URL が違う。メディア全体だけを見ると、押した瞬間に失敗する
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [
+				media({
+					variants: [
+						{ id: 'v0', url: 'file:///etc/passwd', height: 1080 },
+						{ id: 'v1', url: 'https://cdn.example.com/720.mp4', height: 720 },
+					],
+				}),
+			],
+			blocked: false,
+		});
+
+		await screen.findByRole('list', { name: '検出したメディア' });
+		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+	});
+
+	it('DRM 保護されたメディアには操作を出さない', async () => {
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media({ drm: true })], blocked: false });
+
+		await screen.findByRole('list', { name: '検出したメディア' });
+		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+	});
+
+	it('対応外の理由があるメディアには操作を出さない', async () => {
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [media({ unsupportedReason: 'マニフェストを取得できませんでした' })],
+			blocked: false,
+		});
+
+		await screen.findByRole('list', { name: '検出したメディア' });
+		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
 	});
 });

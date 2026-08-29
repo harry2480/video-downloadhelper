@@ -1,4 +1,4 @@
-import type { DetectedMedia, MediaElementCandidate } from './types';
+import type { DetectedMedia, DownloadRequest, DownloadTask, MediaElementCandidate } from './types';
 
 /**
  * コンテキスト間通信の単一の窓口。
@@ -21,19 +21,29 @@ export type BackgroundToContent = {
 };
 
 /** Popup から Background への要求。Port 経由で送る。 */
-export type PopupToBackground = { kind: 'rescan' };
+export type PopupToBackground =
+	| { kind: 'rescan' }
+	| { kind: 'start-download'; request: DownloadRequest }
+	| { kind: 'cancel-download'; taskId: string }
+	| { kind: 'retry-download'; taskId: string };
 
 /**
  * Background から Popup への通知。
  *
  * Popup は状態を所有しない。これを購読して描画するだけにする。
  */
-export type BackgroundToPopup = {
-	kind: 'media-list';
-	media: DetectedMedia[];
-	/** ブロックリスト対象サイトのため機能を無効化しているか */
-	blocked: boolean;
-};
+export type BackgroundToPopup =
+	| {
+			kind: 'media-list';
+			media: DetectedMedia[];
+			/** ブロックリスト対象サイトのため機能を無効化しているか */
+			blocked: boolean;
+	  }
+	| {
+			kind: 'download-updated';
+			/** 当該タブのダウンロードタスク全件。差分ではなく毎回すべて送る */
+			tasks: DownloadTask[];
+	  };
 
 /** Popup が Background へ張る Port の名前。 */
 export const POPUP_PORT_NAME = 'popup';
@@ -43,6 +53,8 @@ const MAX_CANDIDATES = 50;
 /** 検証のために走査する要素数の上限。巨大な配列を渡された場合の負荷を抑える。 */
 const MAX_SCANNED_CANDIDATES = 500;
 const MAX_URL_LENGTH = 4_096;
+/** ID 類の長さ上限。dedupeKey を含む mediaId は URL 相当の長さになる。 */
+const MAX_ID_LENGTH = 4_096;
 const MAX_TITLE_LENGTH = 200;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,4 +116,50 @@ export function parseContentMessage(raw: unknown): ContentToBackground | undefin
 	if (candidates.length === 0) return undefined;
 
 	return { kind: 'media-elements-detected', candidates };
+}
+
+function parseId(value: unknown): string | undefined {
+	if (typeof value !== 'string') return undefined;
+	if (value.length === 0 || value.length > MAX_ID_LENGTH) return undefined;
+	return value;
+}
+
+/**
+ * Popup から届いたメッセージを検証する。
+ *
+ * Port の送信元は接続時に検証済みだが、形の検証はここで行う。
+ * 受け取り側で `kind` だけを見て中身を信じると、将来メッセージが増えたときに
+ * 未定義の値がそのまま処理へ流れる。
+ */
+export function parsePopupMessage(raw: unknown): PopupToBackground | undefined {
+	if (!isRecord(raw)) return undefined;
+
+	if (raw.kind === 'rescan') return { kind: 'rescan' };
+
+	if (raw.kind === 'start-download') {
+		if (!isRecord(raw.request)) return undefined;
+
+		const mediaId = parseId(raw.request.mediaId);
+		if (mediaId === undefined) return undefined;
+
+		const variantId = parseId(raw.request.variantId);
+		const audioVariantId = parseId(raw.request.audioVariantId);
+
+		return {
+			kind: 'start-download',
+			request: {
+				mediaId,
+				...(variantId !== undefined && { variantId }),
+				...(audioVariantId !== undefined && { audioVariantId }),
+			},
+		};
+	}
+
+	if (raw.kind === 'cancel-download' || raw.kind === 'retry-download') {
+		const taskId = parseId(raw.taskId);
+		if (taskId === undefined) return undefined;
+		return { kind: raw.kind, taskId };
+	}
+
+	return undefined;
 }

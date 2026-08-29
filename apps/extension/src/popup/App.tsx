@@ -1,14 +1,18 @@
 import { MediaList } from './components/MediaList';
 import { type Status, StatusMessage } from './components/StatusMessage';
 import { Button } from './components/ui/Button';
-import { type PortFactory, useMediaList } from './hooks/use-media-list';
+import { useDownloads } from './hooks/use-downloads';
+import { useMediaList } from './hooks/use-media-list';
+import { type PortFactory, usePopupPort } from './hooks/use-popup-port';
 
 /**
  * ポップアップの寸法はビューポート単位ではなく固定 px で指定する。
  * スクロールはルートではなく一覧領域の内側に持たせる（docs/スタイルガイド.md 参照）。
  */
 export function App({ portFactory }: { portFactory?: PortFactory }) {
-	const { media, isLoading, isBlocked, rescan } = useMediaList(portFactory);
+	const port = usePopupPort(portFactory);
+	const { media, isLoading, isBlocked, rescan } = useMediaList(port);
+	const { tasksByMedia, start, cancel, retry } = useDownloads(port);
 
 	const status: Status | undefined = isBlocked
 		? 'blocked'
@@ -33,7 +37,17 @@ export function App({ portFactory }: { portFactory?: PortFactory }) {
 			</header>
 
 			<div className="min-h-0 flex-1 overflow-y-auto">
-				{status === undefined ? <MediaList media={media} /> : <StatusMessage status={status} />}
+				{status === undefined ? (
+					<MediaList
+						media={media}
+						tasks={tasksByMedia}
+						onDownload={start}
+						onCancel={cancel}
+						onRetry={retry}
+					/>
+				) : (
+					<StatusMessage status={status} />
+				)}
 			</div>
 		</div>
 	);

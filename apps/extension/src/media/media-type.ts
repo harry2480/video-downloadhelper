@@ -88,6 +88,16 @@ export function detectMediaType(input: {
 	return 'unknown';
 }
 
+/**
+ * 保存ファイル名に使ってよい拡張子か。
+ *
+ * URL のパスはページ側が決められるため、そのまま拡張子にすると
+ * `.exe` や `.html` で保存させられる。判定表にあるものだけを通す。
+ */
+export function isMediaExtension(extension: string): boolean {
+	return Object.hasOwn(EXTENSION_TO_TYPE, extension.toLowerCase());
+}
+
 /** ダウンロード対象になり得る形式か（`unknown` は一覧に出さない）。 */
 export function isSupportedMediaType(type: MediaType): boolean {
 	return type !== 'unknown';

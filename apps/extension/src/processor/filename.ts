@@ -1,3 +1,4 @@
+import { isMediaExtension } from '../media/media-type';
 import type { DetectedMedia, MediaType, MediaVariant } from '../shared/types';
 
 /**
@@ -92,8 +93,11 @@ function extensionFromUrl(url: string): string | undefined {
 	if (dotIndex <= 0 || dotIndex === lastSegment.length - 1) return undefined;
 
 	const extension = lastSegment.slice(dotIndex + 1).toLowerCase();
-	// 拡張子として不自然に長いものは採用しない（クエリ混じり等）
-	return /^[a-z0-9]{1,5}$/.test(extension) ? extension : undefined;
+
+	// **既知のメディア拡張子だけを採用する。** URL のパスはページ側が決められるため、
+	// `Content-Type: video/mp4` を返しつつ `/setup.exe` を指すことができる。
+	// 保存ダイアログを出さない以上、実行ファイル名で着地させない
+	return isMediaExtension(extension) ? extension : undefined;
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { MediaVariant } from '../../shared/types';
 import { classifyCodecs } from '../codecs';
+import { isFetchableUrl } from '../media-type';
 import { detectPlaylistKind, parseMasterPlaylist, parseMediaPlaylist } from './parser';
 import type { ParsedMasterPlaylist, ParsedMediaPlaylist } from './types';
 
@@ -45,7 +46,11 @@ function toMediaVariants(parsed: ParsedMasterPlaylist): MediaVariant[] {
 	// 並べ替えは map より前に行う。BANDWIDTH は #EXT-X-STREAM-INF の必須属性で
 	// この時点では必ず存在するため、既定値の分岐を持たずに済む。
 	// 高画質を先頭にする。既定で最高品質を選ばせるため（要件定義 4.4）
+	//
+	// **スキームをここで絞る。** マニフェストの中身はページ側が決められるため、
+	// 相対 URL の解決結果に file: や data: が現れうる。取得もしないし保存もしない
 	return [...parsed.variants]
+		.filter((variant) => isFetchableUrl(variant.uri))
 		.sort((a, b) => (b.height ?? 0) - (a.height ?? 0) || b.bandwidth - a.bandwidth)
 		.map(
 			(variant, index): MediaVariant => ({

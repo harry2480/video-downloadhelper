@@ -35,6 +35,23 @@ describe('analyzeHlsManifest', () => {
 480p/index.m3u8`;
 
 	describe('Master Playlist', () => {
+		it('取得できないスキームの Variant を捨てる', () => {
+			// マニフェストの中身はページ側が決められる。相対 URL の解決結果として
+			// file: や data: が現れうるため、保存対象へ入れない
+			const manifest = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080
+file:///etc/passwd
+#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720
+data:application/x-mpegurl;base64,QUJD
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480
+480p/index.m3u8`;
+
+			const analysis = unwrap(analyzeHlsManifest(manifest, BASE_URL));
+
+			expect(analysis.variants).toHaveLength(1);
+			expect(analysis.variants?.[0]?.url).toBe('https://cdn.example.com/hls/480p/index.m3u8');
+		});
+
 		it('Variant を高画質順に並べる', () => {
 			// 既定で最高品質を選ばせるため（要件定義 4.4）
 			const analysis = unwrap(analyzeHlsManifest(MASTER, BASE_URL));

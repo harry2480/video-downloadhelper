@@ -1,11 +1,14 @@
 import { createDetectedMediaRepository } from '../shared/storage/detected-media.repository';
+import { createDownloadTaskRepository } from '../shared/storage/download-task.repository';
 import { updateBadge } from './badge';
+import { DownloadManager } from './download-manager';
+import { createDownloader } from './download.adapter';
 import { fireAndForget } from './fire-and-forget';
 import { ManifestResolver } from './manifest-resolver';
 import { createMediaFetcher } from './media-fetcher.adapter';
 import { MediaRegistry } from './media-registry';
 import { registerMessageHandler } from './message-handler';
-import { broadcastToPopups, registerPopupPort } from './popup-port';
+import { broadcastDownloads, broadcastToPopups, registerPopupPort } from './popup-port';
 import { registerRequestDetector } from './request-detector';
 import { registerTabLifecycle } from './tab-manager';
 
@@ -22,6 +25,8 @@ import { registerTabLifecycle } from './tab-manager';
 
 const repository = createDetectedMediaRepository();
 const fetcher = createMediaFetcher();
+const downloader = createDownloader();
+const downloadTasks = createDownloadTaskRepository();
 
 // ManifestResolver は registry を必要とし、registry の通知は resolver を呼ぶ。
 // コールバックは両方の生成後にしか実行されないため、クロージャ経由で参照してよい
@@ -42,8 +47,15 @@ const registry = new MediaRegistry(repository, (tabId, media) => {
 });
 
 const resolver = new ManifestResolver(fetcher, registry);
+const downloads = new DownloadManager(downloader, downloadTasks, registry, broadcastDownloads);
+
+// ブラウザ側の完了・中断はポップアップが閉じていても届く。
+// 進捗（受信バイト数）は通知されないため、ポップアップ接続中のみ問い合わせる
+downloader.subscribe((downloadId) => {
+	fireAndForget(downloads.handleBrowserChange(downloadId), 'ダウンロード状態の取り込み');
+});
 
 registerRequestDetector(registry);
-registerTabLifecycle(registry);
+registerTabLifecycle(registry, downloads);
 registerMessageHandler(registry);
-registerPopupPort(registry, resolver);
+registerPopupPort(registry, resolver, downloads);

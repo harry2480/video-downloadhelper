@@ -105,3 +105,63 @@ export type DetectedMedia = {
 	/** 検出時刻（epoch ms）。一覧の並び順に使う */
 	detectedAt: number;
 };
+
+/**
+ * ダウンロードの要求（要件定義 5.3）。
+ *
+ * **選択した品質はここに載せて渡す。** Popup 側で共有状態として保持しない
+ * （Popup はいつ閉じられてもよい前提のため。要件定義 2.7）。
+ */
+export type DownloadRequest = {
+	mediaId: string;
+
+	/** 選択した映像品質。未指定なら既定（最高品質）を使う */
+	variantId?: string;
+
+	/** 映像と音声が分離している場合の音声。Phase 2 の DASH で使う */
+	audioVariantId?: string;
+};
+
+/** ダウンロードの状態（要件定義 5.4）。 */
+export type DownloadStatus =
+	/** 開始待ち */
+	| 'queued'
+	/** 取得中 */
+	| 'downloading'
+	/** 取得後の結合・変換中。Phase 2 の HLS / DASH で使う */
+	| 'processing'
+	| 'completed'
+	| 'failed'
+	| 'cancelled';
+
+export type DownloadTask = {
+	id: string;
+
+	mediaId: string;
+	variantId?: string;
+	audioVariantId?: string;
+
+	tabId: number;
+
+	filename: string;
+
+	status: DownloadStatus;
+
+	/**
+	 * 0〜100。映像・音声など複数ストリームを取得する場合も全体を通算した値にする。
+	 * 総バイト数が分からない間は 0 のままにする。
+	 */
+	progress: number;
+
+	downloadedBytes?: number;
+	totalBytes?: number;
+
+	/** 失敗の理由。ユーザーへ出せる日本語にしてから入れる */
+	error?: string;
+
+	/** ブラウザのダウンロード ID。取得を開始できた場合のみ持つ */
+	browserDownloadId?: number;
+
+	/** 一覧の並び順に使う（epoch ms） */
+	startedAt: number;
+};
