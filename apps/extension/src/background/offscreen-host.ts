@@ -14,9 +14,15 @@ import type { AssemblerPort } from '../shared/ports/assembler.port';
 const OFFSCREEN_PATH = 'src/offscreen/index.html';
 const JUSTIFICATION = 'HLS のセグメントを結合して保存用の Blob を作るため';
 
-/** 生成直後は受け手のスクリプトがまだ動いていないことがある。 */
-const SEND_RETRIES = 3;
-const RETRY_INTERVAL_MS = 50;
+/**
+ * 生成直後は受け手のスクリプトがまだ動いていないことがある。
+ *
+ * `createDocument` の解決はドキュメントの生成までで、中のスクリプトが
+ * リスナーを登録し終えたことまでは保証しない。冷えた状態からの起動に
+ * 間に合うよう、間隔を伸ばしながら 1 秒以上待つ。
+ */
+const SEND_RETRIES = 5;
+const RETRY_INTERVAL_MS = 80;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -48,8 +54,6 @@ export function createOffscreenHost(): AssemblerPort {
 	}
 
 	async function send(message: BackgroundToOffscreen): Promise<void> {
-		await ensureDocument();
-
 		for (let attempt = 1; ; attempt += 1) {
 			try {
 				await chrome.runtime.sendMessage(message);
@@ -57,34 +61,48 @@ export function createOffscreenHost(): AssemblerPort {
 			} catch (error) {
 				// 生成直後はリスナー登録前で「受け手が居ない」になる
 				if (attempt >= SEND_RETRIES) throw error;
-				await wait(RETRY_INTERVAL_MS);
+				// 待つほど当たりやすくなる。合計で 1 秒強
+				await wait(RETRY_INTERVAL_MS * 2 ** (attempt - 1));
 			}
 		}
 	}
 
+	/**
+	 * Document があるときだけ送る。
+	 *
+	 * 中止や解放のために Document を作り直すと、閉じない設計と相まって
+	 * 用のない Document が残り続ける。
+	 */
+	async function sendIfPresent(message: BackgroundToOffscreen): Promise<void> {
+		if (!(await chrome.offscreen.hasDocument())) return;
+		await send(message);
+	}
+
 	return {
 		async start(job) {
+			await ensureDocument();
 			await send({
 				kind: 'assemble-hls',
 				taskId: job.taskId,
 				playlistUrl: job.playlistUrl,
 				maxBytes: job.maxBytes,
+				allowPrivateHosts: job.allowPrivateHosts,
 			});
 		},
 
 		async cancel(taskId) {
 			try {
-				await send({ kind: 'cancel-assembly', taskId });
+				await sendIfPresent({ kind: 'cancel-assembly', taskId });
 			} catch {
-				// Document が無ければ組み立ても走っていない
+				// 受け手が落ちている場合。組み立ても道連れで終わっている
 			}
 		},
 
 		async release(objectUrl) {
 			try {
-				await send({ kind: 'release-object-url', objectUrl });
+				await sendIfPresent({ kind: 'release-object-url', objectUrl });
 			} catch {
-				// Document が無ければオブジェクト URL も既に失効している
+				// 受け手が落ちている場合。オブジェクト URL も一緒に失効している
 			}
 		},
 	};

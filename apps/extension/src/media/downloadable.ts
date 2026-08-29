@@ -20,6 +20,7 @@ const DOWNLOADABLE_TYPES: ReadonlySet<MediaType> = new Set<MediaType>(['direct',
 const DRM_REJECTED = 'DRM で保護されているため保存できません';
 const NOT_DOWNLOADABLE = 'この形式の保存はまだできません';
 const UNSAFE_URL = 'この URL は保存できません';
+const ANALYZING = '画質を確認しています';
 
 /**
  * 保存する URL を決める。選択された品質があればそれを使う。
@@ -47,6 +48,11 @@ export function downloadRejectionReason(
 	if (media.drm === true) return DRM_REJECTED;
 	if (media.unsupportedReason !== undefined) return media.unsupportedReason;
 	if (!DOWNLOADABLE_TYPES.has(media.type)) return NOT_DOWNLOADABLE;
+
+	// 解析前の HLS で保存を始めると、Master Playlist を組み立てに渡すことになり
+	// 必ず失敗する。画質が確定するまでは操作を出さない
+	if (media.type === 'hls' && media.manifestResolved !== true) return ANALYZING;
+
 	if (resolveDownloadUrl(media, variant) === undefined) return UNSAFE_URL;
 	return undefined;
 }

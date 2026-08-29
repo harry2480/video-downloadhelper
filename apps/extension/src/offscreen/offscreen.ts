@@ -1,7 +1,11 @@
-import { parseMediaPlaylist } from '../media/hls/parser';
+import { detectPlaylistKind, parseMediaPlaylist } from '../media/hls/parser';
 import { planHlsDownload } from '../processor/hls-download';
 import { downloadSegments } from '../processor/segment-download';
-import { type OffscreenToBackground, parseAssemblyCommand } from '../shared/messages';
+import {
+	type BackgroundToOffscreen,
+	type OffscreenToBackground,
+	parseAssemblyCommand,
+} from '../shared/messages';
 import { assembleBlob, releaseObjectUrl } from './blob-assembler';
 import { createSegmentFetcher } from './segment-fetcher';
 
@@ -19,13 +23,25 @@ import { createSegmentFetcher } from './segment-fetcher';
 const FETCH_FAILED = 'セグメントを取得できませんでした';
 const PLAYLIST_FAILED = 'プレイリストを取得できませんでした';
 const NOT_A_PLAYLIST = 'プレイリストとして解析できませんでした';
+const MASTER_PLAYLIST = '画質を選び直してからもう一度お試しください';
 const TOO_LARGE = 'サイズが上限を超えたため中止しました';
 const CANCELLED = 'ダウンロードを中止しました';
+
+type AssembleCommand = Extract<BackgroundToOffscreen, { kind: 'assemble-hls' }>;
 
 const fetcher = createSegmentFetcher();
 
 /** 進行中の組み立て。中止の要求を受け取るために持つ。 */
+const running = new Set<string>();
 const cancelled = new Set<string>();
+
+/**
+ * 進捗を通知する間隔（ms）。
+ *
+ * 1 本ごとに通知すると、セグメント数と同じ回数だけ Service Worker を起こし、
+ * storage への書き込みと Popup への配信が走る。
+ */
+const PROGRESS_INTERVAL_MS = 500;
 
 function notify(message: OffscreenToBackground): void {
 	// Service Worker が停止していても、送信で起こされる
@@ -34,15 +50,44 @@ function notify(message: OffscreenToBackground): void {
 	});
 }
 
-function fail(taskId: string, reason: string): void {
+function finish(taskId: string): void {
+	running.delete(taskId);
 	cancelled.delete(taskId);
+}
+
+function fail(taskId: string, reason: string): void {
+	finish(taskId);
 	notify({ kind: 'assembly-failed', taskId, reason });
 }
 
-async function assemble(taskId: string, playlistUrl: string, maxBytes: number): Promise<void> {
+/**
+ * 組み立ての結果を伝える。
+ *
+ * **送れなかったら自分で解放する。** 受け手が居なければ、この Blob を
+ * 解放できる者が居なくなる（Offscreen Document は閉じない）。
+ */
+function notifyDone(taskId: string, objectUrl: string, bytes: number): void {
+	void chrome.runtime.sendMessage({ kind: 'assembly-done', taskId, objectUrl, bytes }).catch(() => {
+		releaseObjectUrl(objectUrl);
+	});
+}
+
+async function assemble(command: AssembleCommand): Promise<void> {
+	const { taskId, playlistUrl, maxBytes, allowPrivateHosts } = command;
+
+	// 前回の中止指示を持ち越さない。同じ ID で再試行されることがある
+	cancelled.delete(taskId);
+	running.add(taskId);
+
 	const manifest = await fetcher.fetchText(playlistUrl);
 	if (!manifest.ok) {
 		fail(taskId, PLAYLIST_FAILED);
+		return;
+	}
+
+	// Master Playlist を渡されたら、画質が未確定のまま押されている
+	if (detectPlaylistKind(manifest.text) === 'master') {
+		fail(taskId, MASTER_PLAYLIST);
 		return;
 	}
 
@@ -52,18 +97,24 @@ async function assemble(taskId: string, playlistUrl: string, maxBytes: number): 
 		return;
 	}
 
-	const plan = planHlsDownload(parsed.value);
+	const plan = planHlsDownload(parsed.value, { allowPrivateHosts });
 	if (!plan.ok) {
 		fail(taskId, plan.error.reason);
 		return;
 	}
 
 	const total = plan.value.segmentUrls.length;
+	let lastNotifiedAt = 0;
+
 	const fetched = await downloadSegments({
 		urls: plan.value.segmentUrls,
 		fetcher,
 		maxBytes,
 		onProgress: (completed, bytes) => {
+			const now = Date.now();
+			if (completed < total && now - lastNotifiedAt < PROGRESS_INTERVAL_MS) return;
+
+			lastNotifiedAt = now;
 			notify({ kind: 'assembly-progress', taskId, completed, total, bytes });
 		},
 		isCancelled: () => cancelled.has(taskId),
@@ -79,14 +130,9 @@ async function assemble(taskId: string, playlistUrl: string, maxBytes: number): 
 	}
 
 	const assembled = assembleBlob(fetched.value);
-	cancelled.delete(taskId);
+	finish(taskId);
 
-	notify({
-		kind: 'assembly-done',
-		taskId,
-		objectUrl: assembled.objectUrl,
-		bytes: assembled.bytes,
-	});
+	notifyDone(taskId, assembled.objectUrl, assembled.bytes);
 }
 
 chrome.runtime.onMessage.addListener((raw, sender) => {
@@ -98,14 +144,15 @@ chrome.runtime.onMessage.addListener((raw, sender) => {
 	if (command === undefined) return false;
 
 	if (command.kind === 'assemble-hls') {
-		void assemble(command.taskId, command.playlistUrl, command.maxBytes).catch(() => {
+		void assemble(command).catch(() => {
 			fail(command.taskId, FETCH_FAILED);
 		});
 		return false;
 	}
 
 	if (command.kind === 'cancel-assembly') {
-		cancelled.add(command.taskId);
+		// 走っていないものを覚えても、次の再試行を邪魔するだけ
+		if (running.has(command.taskId)) cancelled.add(command.taskId);
 		return false;
 	}
 

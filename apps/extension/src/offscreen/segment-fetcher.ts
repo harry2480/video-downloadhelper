@@ -1,4 +1,5 @@
 import type { SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
+import { readTextWithinLimit } from '../shared/stream';
 import { err, ok } from '../shared/utils';
 
 /**
@@ -13,6 +14,9 @@ import { err, ok } from '../shared/utils';
 
 /** 1 セグメントの上限。TS セグメントは通常 10 秒で数 MB に収まる。 */
 const MAX_SEGMENT_BYTES = 64 * 1024 * 1024;
+
+/** マニフェストとして妥当な上限。Background 側の再フェッチと揃える。 */
+const MAX_MANIFEST_BYTES = 5 * 1024 * 1024;
 
 /** 応答が返らないまま待ち続けないための上限。 */
 const TIMEOUT_MS = 30_000;
@@ -65,7 +69,15 @@ export function createSegmentFetcher(fetchImpl: typeof fetch = fetch): Offscreen
 					await response.body?.cancel();
 					return { ok: false };
 				}
-				return { ok: true, text: await response.text() };
+
+				const declared = Number(response.headers.get('content-length'));
+				if (Number.isFinite(declared) && declared > MAX_MANIFEST_BYTES) {
+					await response.body?.cancel();
+					return { ok: false };
+				}
+
+				// 上限を超えた時点で打ち切る。読み切ってから測っても手遅れになる
+				return await readTextWithinLimit(response.body, MAX_MANIFEST_BYTES);
 			} catch {
 				return { ok: false };
 			}

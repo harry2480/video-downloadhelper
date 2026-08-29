@@ -5,6 +5,7 @@ import { popupUrl } from '../e2e/fixtures';
 import { FIXTURES_DIR } from '../e2e/static-server';
 import {
 	type Harness,
+	readStoredMedia,
 	readStoredTasks,
 	resolveTabId,
 	searchDownloads,
@@ -58,7 +59,14 @@ describe('HLS の保存', () => {
 		await contentPage.bringToFront();
 		await popup.reload();
 
-		// 画質一覧の取得が終わるまで保存できない
+		// **解析の完了を待つ。** 保存ボタンの有無で待つと、解析前でも
+		// 出ていないことの確認にしかならず、Master Playlist を渡してしまう
+		await waitFor(
+			() => readStoredMedia(harness, tabId),
+			(media) => media?.[0]?.manifestResolved === true,
+			{ timeoutMs: 20_000, label: '画質一覧の取得', diagnose: () => snapshot(harness) },
+		);
+
 		await expect
 			.poll(() => popup.getByRole('button', { name: '保存' }).count(), { timeout: 20_000 })
 			.toBe(1);

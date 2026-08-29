@@ -345,9 +345,12 @@ export function parseMediaPlaylist(
 			}
 
 			const method = attributes.METHOD?.toUpperCase();
-			if (method === 'NONE') {
+			if (method === undefined || method === 'NONE') {
 				encryption = { method: 'none' };
-			} else if (method === 'AES-128' && attributes.URI) {
+				continue;
+			}
+
+			if (method === 'AES-128' && attributes.URI !== undefined) {
 				const resolved = resolveUrl(attributes.URI, baseUrl);
 				if (!resolved.ok) return err({ type: 'invalid-uri', input: attributes.URI });
 				encryption = {
@@ -355,7 +358,12 @@ export function parseMediaPlaylist(
 					keyUri: resolved.value,
 					...(attributes.IV !== undefined && { iv: attributes.IV }),
 				};
+				continue;
 			}
+
+			// URI が欠けている、または未知の METHOD。復号できない以上は
+			// 暗号化として扱う。none のまま通すと暗号文をそのまま保存してしまう
+			encryption = { method: 'aes-128' };
 			continue;
 		}
 

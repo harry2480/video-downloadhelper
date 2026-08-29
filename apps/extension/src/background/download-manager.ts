@@ -11,6 +11,7 @@ import type { AssemblerPort } from '../shared/ports/assembler.port';
 import type { DownloadStartFailure, DownloaderPort } from '../shared/ports/download.port';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';
 import type { DetectedMedia, DownloadRequest, DownloadTask, MediaVariant } from '../shared/types';
+import { isPrivateHostUrl } from '../shared/utils';
 import type { MediaRegistry } from './media-registry';
 
 /**
@@ -119,9 +120,7 @@ export class DownloadManager {
 			if (target.status === 'processing') {
 				await this.assembler.cancel(target.id);
 			}
-			if (target.objectUrl !== undefined) {
-				await this.assembler.release(target.objectUrl);
-			}
+			await this.releaseUrl(target.objectUrl);
 
 			await this.commit(replace(tasks, markDownloadCancelled(target)), target.tabId);
 		});
@@ -229,12 +228,25 @@ export class DownloadManager {
 	async forgetTab(tabId: number): Promise<void> {
 		await this.enqueue(async () => {
 			const tasks = await this.repository.findAll();
-			const remaining = tasks.filter((task) => task.tabId !== tabId);
-			if (remaining.length === tasks.length) return;
+			const dropped = tasks.filter((task) => task.tabId === tabId);
+			if (dropped.length === 0) return;
 
-			await this.repository.saveAll(remaining);
+			await this.repository.saveAll(tasks.filter((task) => task.tabId !== tabId));
 			this.onTasksChanged(tabId, []);
+
+			// 拡張機能の中に閉じた資源は道連れにする。
+			// ブラウザ側の保存だけはページの寿命と独立して続く
+			for (const task of dropped) {
+				if (task.status === 'processing') await this.assembler.cancel(task.id);
+				await this.releaseUrl(task.objectUrl);
+			}
 		});
+	}
+
+	/** オブジェクト URL があれば解放する。 */
+	private async releaseUrl(objectUrl: string | undefined): Promise<void> {
+		if (objectUrl === undefined) return;
+		await this.assembler.release(objectUrl);
 	}
 
 	private createTask(
@@ -334,24 +346,39 @@ export class DownloadManager {
 			return;
 		}
 
+		// **依頼と同時に processing にする。** 最初の進捗が届くまで queued のままだと、
+		// 開始待ちの掃除（`sweepStale`）に巻き込まれて取得済みのデータが無駄になる
+		await this.mark(task.id, (current) => ({ ...current, status: 'processing' }));
+
 		try {
 			await this.assembler.start({
 				taskId: task.id,
 				playlistUrl: url,
 				maxBytes: MAX_TOTAL_BYTES,
+				// ページが差し替えられない値で判断する。公開ページから
+				// LAN やループバックを叩かせないため
+				allowPrivateHosts: isPrivateHostUrl(media.sourceUrl),
 			});
 		} catch {
 			await this.failTask(task.id, ASSEMBLY_FAILED);
 		}
 	}
 
-	/** キューの中から呼ぶ前提で、1 件を失敗にする。 */
-	private async failTask(taskId: string, reason: string): Promise<void> {
+	/** キューの中から呼ぶ前提で、1 件を書き換える。 */
+	private async mark(
+		taskId: string,
+		transform: (task: DownloadTask) => DownloadTask,
+	): Promise<void> {
 		const tasks = await this.repository.findAll();
 		const target = tasks.find((task) => task.id === taskId);
 		if (target === undefined) return;
 
-		await this.commit(replace(tasks, markDownloadFailed(target, reason)), target.tabId);
+		await this.commit(replace(tasks, transform(target)), target.tabId);
+	}
+
+	/** キューの中から呼ぶ前提で、1 件を失敗にする。 */
+	private async failTask(taskId: string, reason: string): Promise<void> {
+		await this.mark(taskId, (task) => markDownloadFailed(task, reason));
 	}
 
 	/** ブラウザへ取得を依頼し、結果をタスクへ反映する。 */
@@ -362,13 +389,18 @@ export class DownloadManager {
 		// キューの中で実行されるため、依頼中に他の操作は割り込まない。
 		// ただし依頼が返るまでキューを占有する点は意識しておくこと
 		const current = tasks.find((item) => item.id === task.id);
-		if (current === undefined || !isActive(current)) return;
+		if (current === undefined || !isActive(current)) {
+			// 組み立て済みの Blob を渡せなかった。抱えたままにしない
+			await this.releaseUrl(task.objectUrl);
+			return;
+		}
 
 		if (!started.ok) {
 			await this.commit(
 				replace(tasks, markDownloadFailed(current, describe(started.error))),
 				task.tabId,
 			);
+			await this.releaseUrl(current.objectUrl);
 			return;
 		}
 
@@ -413,7 +445,7 @@ export class DownloadManager {
 		});
 
 		await this.saveAndNotify(next, changedTabs);
-		for (const objectUrl of released) await this.assembler.release(objectUrl);
+		for (const objectUrl of released) await this.releaseUrl(objectUrl);
 	}
 
 	private async saveAndNotify(tasks: DownloadTask[], changedTabs: Set<number>): Promise<void> {

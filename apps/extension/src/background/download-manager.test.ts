@@ -146,6 +146,11 @@ function createHarness() {
 		strandTask() {
 			stored = stored.map((task) => ({ ...task, status: 'queued' as const }));
 		},
+		async detectHls(sourceUrl: string = HLS_URL) {
+			const found = await this.detect(sourceUrl);
+			await this.enrich(found.dedupeKey, {});
+			return { ...found, manifestResolved: true };
+		},
 		async detect(sourceUrl: string, overrides: Partial<DetectionInput> = {}) {
 			await registry.register(input(sourceUrl, overrides), registry.currentGeneration(TAB_ID));
 			const media = await registry.list(TAB_ID);
@@ -231,20 +236,46 @@ describe('start', () => {
 	it('HLS は Offscreen へ組み立てを依頼する', async () => {
 		// Service Worker では URL.createObjectURL が使えない（要件定義 2.6）
 		const harness = createHarness();
-		const media = await harness.detect(HLS_URL);
+		const media = await harness.detectHls();
 
 		await harness.manager.start(TAB_ID, { mediaId: media.id });
 
 		expect(harness.started).toHaveLength(0);
 		expect(harness.jobs).toEqual([
-			{ taskId: 'task-1', playlistUrl: HLS_URL, maxBytes: 2 * 1024 * 1024 * 1024 },
+			{
+				taskId: 'task-1',
+				playlistUrl: HLS_URL,
+				maxBytes: 2 * 1024 * 1024 * 1024,
+				allowPrivateHosts: false,
+			},
 		]);
-		expect(harness.tasks[0]?.status).toBe('queued');
+		// 依頼と同時に組み立て中にする。開始待ちの掃除に巻き込まれないように
+		expect(harness.tasks[0]?.status).toBe('processing');
+	});
+
+	it('解析前の HLS は保存できない', async () => {
+		// Master Playlist を渡すことになり、必ず失敗する
+		const harness = createHarness();
+		const media = await harness.detect(HLS_URL);
+
+		await harness.manager.start(TAB_ID, { mediaId: media.id });
+
+		expect(harness.jobs).toHaveLength(0);
+		expect(harness.tasks[0]?.status).toBe('failed');
+	});
+
+	it('検出元がプライベートならプライベート宛を許す', async () => {
+		const harness = createHarness();
+		const media = await harness.detectHls('http://192.168.1.10/hls/index.m3u8');
+
+		await harness.manager.start(TAB_ID, { mediaId: media.id });
+
+		expect(harness.jobs[0]?.allowPrivateHosts).toBe(true);
 	});
 
 	it('選択した品質のプレイリストを組み立て対象にする', async () => {
 		const harness = createHarness();
-		const media = await harness.detect(HLS_URL);
+		const media = await harness.detectHls();
 		await harness.enrich(media.dedupeKey, {
 			variants: [
 				{ id: 'v0', url: 'https://cdn.example.com/1080/index.m3u8', height: 1080 },
@@ -260,7 +291,7 @@ describe('start', () => {
 	it('推定サイズが上限を超えるなら取りかからない', async () => {
 		// 組み立ては全体をメモリへ載せる。始めてから落ちるより先に伝える
 		const harness = createHarness();
-		const media = await harness.detect(HLS_URL);
+		const media = await harness.detectHls();
 		await harness.enrich(media.dedupeKey, {
 			variants: [
 				{
@@ -283,7 +314,7 @@ describe('start', () => {
 	it('組み立てを依頼できなければ失敗にする', async () => {
 		const harness = createHarness();
 		harness.failAssemblyStart();
-		const media = await harness.detect(HLS_URL);
+		const media = await harness.detectHls();
 
 		await harness.manager.start(TAB_ID, { mediaId: media.id });
 
@@ -428,7 +459,7 @@ describe('進捗の取り込み', () => {
 describe('組み立ての通知', () => {
 	async function startAssembly() {
 		const harness = createHarness();
-		const media = await harness.detect(HLS_URL);
+		const media = await harness.detectHls();
 		await harness.manager.start(TAB_ID, { mediaId: media.id });
 		return { harness, taskId: harness.tasks[0]?.id as string };
 	}
@@ -499,7 +530,7 @@ describe('組み立ての通知', () => {
 		await harness.manager.handleAssemblyProgress('unknown', 1, 2, 10);
 		await harness.manager.handleAssemblyFailed('unknown', '失敗');
 
-		expect(harness.tasks[0]?.status).toBe('queued');
+		expect(harness.tasks[0]).toMatchObject({ status: 'processing', progress: 0 });
 	});
 
 	it('組み立て中の中止で Offscreen へも伝える', async () => {
@@ -512,15 +543,41 @@ describe('組み立ての通知', () => {
 		expect(harness.tasks[0]?.status).toBe('cancelled');
 	});
 
-	it('組み立て中は開始待ちの掃除にかからない', async () => {
-		// セグメント取得は 60 秒を超えることがある
-		const { harness, taskId } = await startAssembly();
-		await harness.manager.handleAssemblyProgress(taskId, 1, 4, 100);
+	it('進捗が一度も届かなくても開始待ちの掃除にかからない', async () => {
+		// プレイリストの取得と 1 本目のセグメントだけで 60 秒に届きうる
+		const { harness } = await startAssembly();
 
 		harness.advance(120_000);
 		await harness.manager.refresh();
 
 		expect(harness.tasks[0]?.status).toBe('processing');
+	});
+
+	it('保存を開始できなければオブジェクト URL を解放する', async () => {
+		const { harness, taskId } = await startAssembly();
+		harness.failStart({ reason: 'denied' });
+
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+
+		expect(harness.tasks[0]?.status).toBe('failed');
+		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
+	});
+
+	it('タブを閉じたら組み立てを止めてオブジェクト URL を解放する', async () => {
+		const { harness, taskId } = await startAssembly();
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+
+		await harness.manager.forgetTab(TAB_ID);
+
+		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
+	});
+
+	it('組み立て中にタブを閉じたら Offscreen へ中止を伝える', async () => {
+		const { harness, taskId } = await startAssembly();
+
+		await harness.manager.forgetTab(TAB_ID);
+
+		expect(harness.cancelledJobs).toEqual([taskId]);
 	});
 });
 

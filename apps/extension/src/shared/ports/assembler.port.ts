@@ -13,6 +13,13 @@ export type AssemblyJob = {
 	playlistUrl: string;
 	/** 合計サイズの上限（バイト） */
 	maxBytes: number;
+	/**
+	 * プライベートネットワーク宛のセグメントを許すか。
+	 *
+	 * 検出元のメディア URL 自体がプライベートな場合にのみ真にする。
+	 * ページが差し替えられない値（webRequest で観測した URL）を材料にする。
+	 */
+	allowPrivateHosts: boolean;
 };
 
 export type AssemblerPort = {

@@ -111,8 +111,9 @@ export function markDownloadCancelled(task: DownloadTask): DownloadTask {
 /**
  * 再試行のために開始前の状態へ戻す。ファイル名と選択品質は引き継ぐ。
  *
- * **総バイト数も落とす。** 残すと、再試行先が Content-Length を返さない場合に
- * 前回の総量で割った進捗が出る（小さいファイルなら即 100% になる）。
+ * **総バイト数とオブジェクト URL も落とす。** 総バイト数を残すと、再試行先が
+ * Content-Length を返さない場合に前回の総量で割った進捗が出る。オブジェクト
+ * URL を残すと、解放済みの URL に対してもう一度解放を要求してしまう。
  */
 export function resetDownloadTask(task: DownloadTask, startedAt: number): DownloadTask {
 	const {
@@ -120,6 +121,7 @@ export function resetDownloadTask(task: DownloadTask, startedAt: number): Downlo
 		browserDownloadId: _id,
 		downloadedBytes: _bytes,
 		totalBytes: _total,
+		objectUrl: _objectUrl,
 		...rest
 	} = task;
 	return { ...rest, status: 'queued', progress: 0, startedAt };

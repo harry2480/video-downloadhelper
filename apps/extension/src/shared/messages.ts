@@ -1,4 +1,5 @@
 import type { DetectedMedia, DownloadRequest, DownloadTask, MediaElementCandidate } from './types';
+import { isHttpUrl } from './utils';
 
 /**
  * コンテキスト間通信の単一の窓口。
@@ -58,6 +59,11 @@ export type BackgroundToOffscreen =
 			playlistUrl: string;
 			/** 合計サイズの上限（バイト） */
 			maxBytes: number;
+			/**
+			 * プライベートネットワーク宛のセグメントを許すか。
+			 * 検出元のメディア URL 自体がプライベートな場合にのみ真になる
+			 */
+			allowPrivateHosts: boolean;
 	  }
 	| { kind: 'cancel-assembly'; taskId: string }
 	| { kind: 'release-object-url'; objectUrl: string };
@@ -228,6 +234,10 @@ export function parseOffscreenMessage(raw: unknown): OffscreenToBackground | und
 		const bytes = parseCount(raw.bytes);
 		if (objectUrl === undefined || bytes === undefined) return undefined;
 
+		// 組み立て結果は必ずオブジェクト URL。そのまま chrome.downloads へ渡すため、
+		// 信頼境界で形を確かめておく
+		if (!objectUrl.startsWith('blob:')) return undefined;
+
 		return { kind: 'assembly-done', taskId, objectUrl, bytes };
 	}
 
@@ -252,8 +262,15 @@ export function parseAssemblyCommand(raw: unknown): BackgroundToOffscreen | unde
 		if (taskId === undefined || playlistUrl === undefined || maxBytes === undefined) {
 			return undefined;
 		}
+		if (!isHttpUrl(playlistUrl)) return undefined;
 
-		return { kind: 'assemble-hls', taskId, playlistUrl, maxBytes };
+		return {
+			kind: 'assemble-hls',
+			taskId,
+			playlistUrl,
+			maxBytes,
+			allowPrivateHosts: raw.allowPrivateHosts === true,
+		};
 	}
 
 	if (raw.kind === 'cancel-assembly') {

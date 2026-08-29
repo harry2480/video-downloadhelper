@@ -307,6 +307,7 @@ describe('parseAssemblyCommand', () => {
 			taskId: 't1',
 			playlistUrl: 'https://cdn.example.com/index.m3u8',
 			maxBytes: 100,
+			allowPrivateHosts: false,
 		});
 	});
 
@@ -319,6 +320,41 @@ describe('parseAssemblyCommand', () => {
 			kind: 'release-object-url',
 			objectUrl: 'blob:x',
 		});
+	});
+
+	it('プライベート宛の許可を明示されたときだけ真にする', () => {
+		const parsed = parseAssemblyCommand({
+			kind: 'assemble-hls',
+			taskId: 't1',
+			playlistUrl: 'https://cdn.example.com/index.m3u8',
+			maxBytes: 100,
+			allowPrivateHosts: true,
+		});
+
+		expect(parsed).toMatchObject({ allowPrivateHosts: true });
+	});
+
+	it('組み立て結果はオブジェクト URL に限る', () => {
+		// そのまま chrome.downloads へ渡すため、信頼境界で形を確かめる
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-done',
+				taskId: 't1',
+				objectUrl: 'https://evil.example.com/x',
+				bytes: 1,
+			}),
+		).toBeUndefined();
+	});
+
+	it('取得できないスキームのプレイリストは受け付けない', () => {
+		expect(
+			parseAssemblyCommand({
+				kind: 'assemble-hls',
+				taskId: 't1',
+				playlistUrl: 'file:///etc/passwd',
+				maxBytes: 100,
+			}),
+		).toBeUndefined();
 	});
 
 	it('形が合わないものは破棄する', () => {
