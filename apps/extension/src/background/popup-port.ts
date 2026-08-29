@@ -90,6 +90,10 @@ async function attachSubscriber(
 
 	port.onMessage.addListener((message: PopupToBackground) => {
 		if (message?.kind !== 'rescan') return;
+		// ブロック対象サイトでは何もしない（要件定義 2.4）。
+		// 検出側でも遮っているが、起点ごとに判定しないと必ず漏れる
+		if (blocked) return;
+
 		fireAndForget(requestRescan(tabId), '再スキャンの要求');
 
 		// 明示的な再試行。取得に失敗していた項目をもう一度取りに行く
@@ -97,15 +101,22 @@ async function attachSubscriber(
 		fireAndForget(resolvePending(registry, resolver, tabId), 'マニフェストの解析');
 	});
 
-	postMediaList(port, blocked ? [] : await registry.list(tabId), blocked);
+	if (blocked) {
+		postMediaList(port, [], true);
+		return;
+	}
 
-	if (blocked) return;
+	// 世代は一覧を読む前に取る。読んでいる間に遷移すると、旧ページの検出結果を
+	// 遷移後の世代で解析してしまう
+	const generation = registry.currentGeneration(tabId);
+	const media = await registry.list(tabId);
+	postMediaList(port, media, false);
 
 	// **ここが Service Worker 再起動後の唯一の再開契機になる。**
 	// 解析は検出結果の変化からしか始まらないが、読み込みの終わったページでは
 	// もうメディアリクエストが起きない。ポップアップを開いた時点で拾い直さないと
 	// 「画質を確認しています…」のまま止まる
-	fireAndForget(resolvePending(registry, resolver, tabId), 'マニフェストの解析');
+	fireAndForget(resolver.resolvePending(tabId, media, generation), 'マニフェストの解析');
 }
 
 /** 現在の検出結果のうち未解析の HLS を解析する。 */
@@ -114,8 +125,6 @@ async function resolvePending(
 	resolver: ManifestResolver,
 	tabId: number,
 ): Promise<void> {
-	// 世代は一覧を読む前に取る。読んでいる間に遷移すると、旧ページの検出結果を
-	// 遷移後の世代で解析してしまう
 	const generation = registry.currentGeneration(tabId);
 	await resolver.resolvePending(tabId, await registry.list(tabId), generation);
 }
