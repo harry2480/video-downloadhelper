@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BackgroundToPopup, PopupToBackground } from '../../shared/messages';
-import { POPUP_PORT_NAME } from '../../shared/messages';
+import { useCallback, useEffect, useState } from 'react';
 import type { DetectedMedia } from '../../shared/types';
+import type { PopupPort } from './use-popup-port';
 
 /**
  * Background が所有する検出結果を購読する。
@@ -9,11 +8,6 @@ import type { DetectedMedia } from '../../shared/types';
  * **Popup は状態を所有しない。** ここで持つのは描画のための派生でしかなく、
  * 真実の情報源は常に Background 側にある（要件定義 2.7）。
  */
-
-/** Port を張る手段。テストでは Fake を注入する。 */
-export type PortFactory = () => chrome.runtime.Port;
-
-const defaultPortFactory: PortFactory = () => chrome.runtime.connect({ name: POPUP_PORT_NAME });
 
 type MediaListState = {
 	media: DetectedMedia[];
@@ -24,36 +18,23 @@ type MediaListState = {
 	rescan: () => void;
 };
 
-export function useMediaList(portFactory: PortFactory = defaultPortFactory): MediaListState {
+export function useMediaList(port: PopupPort): MediaListState {
 	const [media, setMedia] = useState<DetectedMedia[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [isBlocked, setIsBlocked] = useState(false);
-	const portRef = useRef<chrome.runtime.Port | undefined>(undefined);
 
-	useEffect(() => {
-		const port = portFactory();
-		portRef.current = port;
+	useEffect(
+		() =>
+			port.subscribe((message) => {
+				if (message.kind !== 'media-list') return;
+				setMedia(message.media);
+				setIsBlocked(message.blocked);
+				setIsLoading(false);
+			}),
+		[port],
+	);
 
-		const onMessage = (message: BackgroundToPopup) => {
-			if (message?.kind !== 'media-list') return;
-			setMedia(message.media);
-			setIsBlocked(message.blocked);
-			setIsLoading(false);
-		};
-
-		port.onMessage.addListener(onMessage);
-
-		return () => {
-			port.onMessage.removeListener(onMessage);
-			portRef.current = undefined;
-			port.disconnect();
-		};
-	}, [portFactory]);
-
-	const rescan = useCallback(() => {
-		const message: PopupToBackground = { kind: 'rescan' };
-		portRef.current?.postMessage(message);
-	}, []);
+	const rescan = useCallback(() => port.send({ kind: 'rescan' }), [port]);
 
 	return { media, isLoading, isBlocked, rescan };
 }

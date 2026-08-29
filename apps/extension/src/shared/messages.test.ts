@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseContentMessage } from './messages';
+import { parseContentMessage, parsePopupMessage } from './messages';
 
 /**
  * Content Script はページと同じプロセスで動くため、送られてくる値は
@@ -149,5 +149,71 @@ describe('parseContentMessage', () => {
 
 			expect(parseContentMessage(message(huge))).toBeUndefined();
 		});
+	});
+});
+
+describe('parsePopupMessage', () => {
+	it('再スキャン要求を通す', () => {
+		expect(parsePopupMessage({ kind: 'rescan' })).toEqual({ kind: 'rescan' });
+	});
+
+	it('ダウンロード要求を通す', () => {
+		expect(
+			parsePopupMessage({ kind: 'start-download', request: { mediaId: '1:https://a/v.mp4' } }),
+		).toEqual({ kind: 'start-download', request: { mediaId: '1:https://a/v.mp4' } });
+	});
+
+	it('選択された品質を引き継ぐ', () => {
+		const parsed = parsePopupMessage({
+			kind: 'start-download',
+			request: { mediaId: '1:https://a/v.m3u8', variantId: 'v1', audioVariantId: 'a0' },
+		});
+
+		expect(parsed).toEqual({
+			kind: 'start-download',
+			request: { mediaId: '1:https://a/v.m3u8', variantId: 'v1', audioVariantId: 'a0' },
+		});
+	});
+
+	it('品質の指定が壊れていても要求自体は通す', () => {
+		// 品質が選べないだけで、既定の品質なら保存できる
+		const parsed = parsePopupMessage({
+			kind: 'start-download',
+			request: { mediaId: '1:https://a/v.mp4', variantId: 42 },
+		});
+
+		expect(parsed).toEqual({ kind: 'start-download', request: { mediaId: '1:https://a/v.mp4' } });
+	});
+
+	it('中止・再試行の要求を通す', () => {
+		expect(parsePopupMessage({ kind: 'cancel-download', taskId: 't1' })).toEqual({
+			kind: 'cancel-download',
+			taskId: 't1',
+		});
+		expect(parsePopupMessage({ kind: 'retry-download', taskId: 't1' })).toEqual({
+			kind: 'retry-download',
+			taskId: 't1',
+		});
+	});
+
+	it('形が合わないものは破棄する', () => {
+		expect(parsePopupMessage(undefined)).toBeUndefined();
+		expect(parsePopupMessage('rescan')).toBeUndefined();
+		expect(parsePopupMessage([{ kind: 'rescan' }])).toBeUndefined();
+		expect(parsePopupMessage({ kind: 'unknown' })).toBeUndefined();
+		expect(parsePopupMessage({ kind: 'start-download' })).toBeUndefined();
+		expect(parsePopupMessage({ kind: 'start-download', request: { mediaId: '' } })).toBeUndefined();
+		expect(parsePopupMessage({ kind: 'start-download', request: { mediaId: 1 } })).toBeUndefined();
+		expect(parsePopupMessage({ kind: 'cancel-download' })).toBeUndefined();
+		expect(parsePopupMessage({ kind: 'retry-download', taskId: 7 })).toBeUndefined();
+	});
+
+	it('長すぎる ID を弾く', () => {
+		const long = 'x'.repeat(4_097);
+
+		expect(parsePopupMessage({ kind: 'cancel-download', taskId: long })).toBeUndefined();
+		expect(
+			parsePopupMessage({ kind: 'start-download', request: { mediaId: long } }),
+		).toBeUndefined();
 	});
 });

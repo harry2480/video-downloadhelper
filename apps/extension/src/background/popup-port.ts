@@ -3,9 +3,10 @@ import {
 	type BackgroundToContent,
 	type BackgroundToPopup,
 	POPUP_PORT_NAME,
-	type PopupToBackground,
+	parsePopupMessage,
 } from '../shared/messages';
-import type { DetectedMedia } from '../shared/types';
+import type { DetectedMedia, DownloadTask } from '../shared/types';
+import type { DownloadManager } from './download-manager';
 import { fireAndForget } from './fire-and-forget';
 import type { ManifestResolver } from './manifest-resolver';
 import type { MediaRegistry } from './media-registry';
@@ -20,6 +21,14 @@ import type { MediaRegistry } from './media-registry';
  * ポップアップは開いている間しか存在しないため、Port は 1 本かゼロ本。
  * それでも複数接続を許す形にしておく（開発時に複数ウィンドウで開くことがある）。
  */
+
+/**
+ * ダウンロード進捗を取り込む間隔（ms）。
+ *
+ * `chrome.downloads` は受信バイト数を通知しないため問い合わせる必要がある。
+ * ポップアップが開いている間だけ回し、誰も見ていないときは止める（要件定義 2.7）。
+ */
+const PROGRESS_POLL_MS = 1_000;
 
 type Subscriber = {
 	port: chrome.runtime.Port;
@@ -38,7 +47,10 @@ async function resolveActiveTab(): Promise<chrome.tabs.Tab | undefined> {
 }
 
 function postMediaList(port: chrome.runtime.Port, media: DetectedMedia[], blocked: boolean): void {
-	const message: BackgroundToPopup = { kind: 'media-list', media, blocked };
+	post(port, { kind: 'media-list', media, blocked });
+}
+
+function post(port: chrome.runtime.Port, message: BackgroundToPopup): void {
 	try {
 		port.postMessage(message);
 	} catch {
@@ -54,7 +66,19 @@ export function broadcastToPopups(tabId: number, media: DetectedMedia[]): void {
 	}
 }
 
-export function registerPopupPort(registry: MediaRegistry, resolver: ManifestResolver): void {
+/** ダウンロード状態が変わったタブを購読している Popup へ通知する。 */
+export function broadcastDownloads(tabId: number, tasks: DownloadTask[]): void {
+	for (const subscriber of subscribers) {
+		if (subscriber.tabId !== tabId) continue;
+		post(subscriber.port, { kind: 'download-updated', tasks });
+	}
+}
+
+export function registerPopupPort(
+	registry: MediaRegistry,
+	resolver: ManifestResolver,
+	downloads: DownloadManager,
+): void {
 	chrome.runtime.onConnect.addListener((port) => {
 		// 送信元を検証する。外部から接続できないようにするための防壁
 		if (port.sender?.id !== chrome.runtime.id) {
@@ -63,13 +87,17 @@ export function registerPopupPort(registry: MediaRegistry, resolver: ManifestRes
 		}
 		if (port.name !== POPUP_PORT_NAME) return;
 
-		fireAndForget(attachSubscriber(registry, resolver, port), 'ポップアップへの状態配信');
+		fireAndForget(
+			attachSubscriber(registry, resolver, downloads, port),
+			'ポップアップへの状態配信',
+		);
 	});
 }
 
 async function attachSubscriber(
 	registry: MediaRegistry,
 	resolver: ManifestResolver,
+	downloads: DownloadManager,
 	port: chrome.runtime.Port,
 ): Promise<void> {
 	const tab = await resolveActiveTab();
@@ -84,21 +112,44 @@ async function attachSubscriber(
 	const subscriber: Subscriber = { port, tabId };
 	subscribers.add(subscriber);
 
+	// 進捗はポップアップが開いている間だけ取り込む
+	const poll = setInterval(() => {
+		fireAndForget(downloads.refresh(), 'ダウンロード進捗の取り込み');
+	}, PROGRESS_POLL_MS);
+
 	port.onDisconnect.addListener(() => {
 		subscribers.delete(subscriber);
+		clearInterval(poll);
 	});
 
-	port.onMessage.addListener((message: PopupToBackground) => {
-		if (message?.kind !== 'rescan') return;
+	port.onMessage.addListener((raw: unknown) => {
+		const message = parsePopupMessage(raw);
+		if (message === undefined) return;
+
 		// ブロック対象サイトでは何もしない（要件定義 2.4）。
 		// 検出側でも遮っているが、起点ごとに判定しないと必ず漏れる
 		if (blocked) return;
 
-		fireAndForget(requestRescan(tabId), '再スキャンの要求');
+		if (message.kind === 'rescan') {
+			fireAndForget(requestRescan(tabId), '再スキャンの要求');
 
-		// 明示的な再試行。取得に失敗していた項目をもう一度取りに行く
-		resolver.resetFailures(tabId);
-		fireAndForget(resolvePending(registry, resolver, tabId), 'マニフェストの解析');
+			// 明示的な再試行。取得に失敗していた項目をもう一度取りに行く
+			resolver.resetFailures(tabId);
+			fireAndForget(resolvePending(registry, resolver, tabId), 'マニフェストの解析');
+			return;
+		}
+
+		if (message.kind === 'start-download') {
+			fireAndForget(downloads.start(tabId, message.request), 'ダウンロードの開始');
+			return;
+		}
+
+		if (message.kind === 'cancel-download') {
+			fireAndForget(downloads.cancel(message.taskId), 'ダウンロードの中止');
+			return;
+		}
+
+		fireAndForget(downloads.retry(message.taskId), 'ダウンロードの再試行');
 	});
 
 	if (blocked) {
@@ -117,6 +168,10 @@ async function attachSubscriber(
 	// もうメディアリクエストが起きない。ポップアップを開いた時点で拾い直さないと
 	// 「画質を確認しています…」のまま止まる
 	fireAndForget(resolver.resolvePending(tabId, media, generation), 'マニフェストの解析');
+
+	// 進行中の取得は Service Worker の停止をまたいで続く。開いた時点の状態を渡す
+	post(port, { kind: 'download-updated', tasks: await downloads.listByTab(tabId) });
+	fireAndForget(downloads.refresh(), 'ダウンロード進捗の取り込み');
 }
 
 /** 現在の検出結果のうち未解析の HLS を解析する。 */

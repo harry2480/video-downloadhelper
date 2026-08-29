@@ -1,4 +1,4 @@
-import type { DetectedMedia } from '../../src/shared/types';
+import type { DetectedMedia, DownloadTask } from '../../src/shared/types';
 import { type ExtensionContext, launchExtension } from '../e2e/fixtures';
 import { type StaticServer, startStaticServer } from '../e2e/static-server';
 
@@ -165,4 +165,45 @@ export async function snapshot(harness: Harness): Promise<unknown> {
 			beforeRequest: chrome.webRequest.onBeforeRequest.hasListeners(),
 		},
 	}));
+}
+
+/** ダウンロードタスクの保存状態を Service Worker の中から読む。 */
+export async function readStoredTasks(harness: Harness): Promise<DownloadTask[] | undefined> {
+	const worker = harness.context.serviceWorkers()[0];
+	if (!worker) throw new Error('service worker not found');
+
+	return worker.evaluate(async () => {
+		const stored = await chrome.storage.session.get('download-tasks');
+		return stored['download-tasks'] as unknown[] | undefined;
+	}) as Promise<DownloadTask[] | undefined>;
+}
+
+export type DownloadItemSummary = {
+	id: number;
+	/** 保存先の絶対パス */
+	filename: string;
+	state: string;
+	bytesReceived: number;
+	totalBytes: number;
+};
+
+/**
+ * ブラウザが持っているダウンロードの一覧。
+ *
+ * 拡張機能側の状態ではなく、実際に保存が行われたかを確かめるために使う。
+ */
+export async function searchDownloads(harness: Harness): Promise<DownloadItemSummary[]> {
+	const worker = harness.context.serviceWorkers()[0];
+	if (!worker) throw new Error('service worker not found');
+
+	return worker.evaluate(async () => {
+		const items = await chrome.downloads.search({});
+		return items.map((item) => ({
+			id: item.id,
+			filename: item.filename,
+			state: item.state,
+			bytesReceived: item.bytesReceived,
+			totalBytes: item.totalBytes,
+		}));
+	});
 }

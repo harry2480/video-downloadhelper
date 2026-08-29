@@ -7,7 +7,8 @@ import {
 	formatUnsupportedReason,
 	formatUrlForDisplay,
 } from '../../media/format';
-import type { DetectedMedia } from '../../shared/types';
+import type { DetectedMedia, DownloadRequest, DownloadTask } from '../../shared/types';
+import { DownloadControl } from './DownloadControl';
 import { QualitySelector } from './QualitySelector';
 import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
@@ -18,7 +19,15 @@ import { Button } from './ui/Button';
  * 表示する文字列はすべてページ由来の信頼できない入力。
  * `dangerouslySetInnerHTML` を使わず、折り返しを必ず指定する。
  */
-export function MediaItem({ media }: { media: DetectedMedia }) {
+type Props = {
+	media: DetectedMedia;
+	task: DownloadTask | undefined;
+	onDownload: (request: DownloadRequest) => void;
+	onCancel: (taskId: string) => void;
+	onRetry: (taskId: string) => void;
+};
+
+export function MediaItem({ media, task, onDownload, onCancel, onRetry }: Props) {
 	const [isDetailOpen, setIsDetailOpen] = useState(false);
 	const detailId = useId();
 
@@ -62,6 +71,17 @@ export function MediaItem({ media }: { media: DetectedMedia }) {
 						onSelect={setSelectedVariantId}
 					/>
 				)}
+
+				<div className="mt-1">
+					<DownloadControl
+						media={media}
+						variantId={effectiveVariantId}
+						task={task}
+						onDownload={onDownload}
+						onCancel={onCancel}
+						onRetry={onRetry}
+					/>
+				</div>
 
 				<div className="mt-1 flex gap-2">
 					<Button

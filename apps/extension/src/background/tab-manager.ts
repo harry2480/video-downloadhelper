@@ -1,3 +1,4 @@
+import type { DownloadManager } from './download-manager';
 import { fireAndForget } from './fire-and-forget';
 import type { MediaRegistry } from './media-registry';
 
@@ -12,8 +13,12 @@ import type { MediaRegistry } from './media-registry';
  * History API による遷移は main_frame リクエストを発生させないため、
  * この方式なら SPA 内遷移で検出結果が消えない。`webNavigation` 権限を
  * 追加せずに規則をそのまま表現できる。
+ *
+ * ダウンロードタスクはページ遷移では消さない。保存はページの寿命とは独立して
+ * 進むため。タブが閉じられたときだけ当該タブのタスクを一覧から外す
+ * （ブラウザ側の保存自体は続く）。
  */
-export function registerTabLifecycle(registry: MediaRegistry): void {
+export function registerTabLifecycle(registry: MediaRegistry, downloads: DownloadManager): void {
 	chrome.webRequest.onBeforeRequest.addListener(
 		(details) => {
 			if (details.tabId >= 0) {
@@ -28,11 +33,13 @@ export function registerTabLifecycle(registry: MediaRegistry): void {
 
 	chrome.tabs.onRemoved.addListener((tabId) => {
 		fireAndForget(registry.clearTab(tabId), '検出結果の破棄');
+		fireAndForget(downloads.forgetTab(tabId), 'ダウンロード状態の破棄');
 	});
 
 	// タブが破棄され別プロセスで復元された場合、旧 tabId の結果は不要になる
 	chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
 		fireAndForget(registry.clearTab(removedTabId), '検出結果の破棄');
 		fireAndForget(registry.clearTab(addedTabId), '検出結果の破棄');
+		fireAndForget(downloads.forgetTab(removedTabId), 'ダウンロード状態の破棄');
 	});
 }
