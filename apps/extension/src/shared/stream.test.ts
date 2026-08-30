@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readTextWithinLimit } from './stream';
+import { readBytesWithinLimit, readTextWithinLimit } from './stream';
 
 /**
  * マニフェスト取得の入口。上限を超えたものを読み切らないことが要点で、
@@ -40,5 +40,37 @@ describe('readTextWithinLimit', () => {
 
 	it('本文が無ければ空文字にする', async () => {
 		expect(await readTextWithinLimit(null, 100)).toEqual({ ok: true, text: '' });
+	});
+});
+
+describe('readBytesWithinLimit', () => {
+	it('本文をバイト列として読む', async () => {
+		const read = await readBytesWithinLimit(streamOf(encode('ab'), encode('cd')), 100);
+
+		expect(read).toEqual({ ok: true, bytes: encode('abcd') });
+	});
+
+	it('上限を超えたら確保しきる前に打ち切る', async () => {
+		// Content-Length を返さない応答では、確保してから測っても手遅れになる
+		let delivered = 0;
+		const stream = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				delivered += 1;
+				controller.enqueue(new Uint8Array(new ArrayBuffer(4)));
+				if (delivered > 100) controller.close();
+			},
+		});
+
+		const read = await readBytesWithinLimit(stream, 8);
+
+		expect(read).toEqual({ ok: false });
+		// 上限ぶんを少し超えた時点で止まる。全部は読まない
+		expect(delivered).toBeLessThan(10);
+	});
+
+	it('本文が無ければ空にする', async () => {
+		const read = await readBytesWithinLimit(null, 100);
+
+		expect(read).toEqual({ ok: true, bytes: new Uint8Array(new ArrayBuffer(0)) });
 	});
 });

@@ -1,6 +1,6 @@
 import type { SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
-import { readTextWithinLimit } from '../shared/stream';
-import { err, ok } from '../shared/utils';
+import { readBytesWithinLimit, readTextWithinLimit } from '../shared/stream';
+import { err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
 
 /**
  * セグメント取得の実装。
@@ -10,6 +10,10 @@ import { err, ok } from '../shared/utils';
  * （`background/media-fetcher.adapter.ts` を参照）。
  *
  * 取得した内容は保存にのみ使い、外部へ送信しない（要件定義 12 章）。
+ *
+ * **リダイレクトの着地点も確かめる。** 計画の時点で宛先を絞っても、
+ * `redirect: 'follow'` のままではリダイレクトでループバックや LAN へ
+ * 連れて行かれる。最終 URL が方針から外れていれば結果を捨てる。
  */
 
 /** 1 セグメントの上限。TS セグメントは通常 10 秒で数 MB に収まる。 */
@@ -26,20 +30,46 @@ type OffscreenFetcher = SegmentFetcherPort & {
 	fetchText: (url: string) => Promise<{ ok: true; text: string } | { ok: false }>;
 };
 
-/** テストでは fetch を差し替える。 */
-export function createSegmentFetcher(fetchImpl: typeof fetch = fetch): OffscreenFetcher {
-	async function request(url: string): Promise<Response> {
-		return fetchImpl(url, {
+type FetcherOptions = {
+	/** プライベートネットワーク宛を許すか。組み立ての依頼ごとに決まる */
+	allowPrivateHosts?: boolean;
+	/** テストでは fetch を差し替える */
+	fetchImpl?: typeof fetch;
+};
+
+export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFetcher {
+	const fetchImpl = options.fetchImpl ?? fetch;
+
+	/** 取得してよい宛先か。リダイレクトの着地点にも同じ物差しを当てる。 */
+	function isAllowed(url: string): boolean {
+		if (!isHttpUrl(url)) return false;
+		return options.allowPrivateHosts === true || !isPrivateHostUrl(url);
+	}
+
+	async function request(url: string): Promise<Response | undefined> {
+		const response = await fetchImpl(url, {
 			credentials: 'include',
 			redirect: 'follow',
 			signal: AbortSignal.timeout(TIMEOUT_MS),
 		});
+
+		// リダイレクトで方針の外へ出ていたら、本文を読まずに捨てる
+		if (response.url !== '' && !isAllowed(response.url)) {
+			await response.body?.cancel();
+			return undefined;
+		}
+
+		return response;
 	}
 
 	return {
 		async fetchBytes(url) {
+			if (!isAllowed(url)) return err({ reason: 'network' });
+
 			try {
 				const response = await request(url);
+				if (response === undefined) return err({ reason: 'network' });
+
 				if (!response.ok) {
 					// ボディを捨てて接続を解放する。読まないまま放置しない
 					await response.body?.cancel();
@@ -52,10 +82,12 @@ export function createSegmentFetcher(fetchImpl: typeof fetch = fetch): Offscreen
 					return err({ reason: 'too-large' });
 				}
 
-				const buffer = await response.arrayBuffer();
-				if (buffer.byteLength > MAX_SEGMENT_BYTES) return err({ reason: 'too-large' });
+				// 読みながら測る。Content-Length を返さない応答では
+				// 確保してから測っても手遅れになる
+				const read = await readBytesWithinLimit(response.body, MAX_SEGMENT_BYTES);
+				if (!read.ok) return err({ reason: 'too-large' });
 
-				return ok(new Uint8Array(buffer));
+				return ok(read.bytes);
 			} catch {
 				// タイムアウト・DNS・CORS 等
 				return err({ reason: 'network' });
@@ -63,8 +95,12 @@ export function createSegmentFetcher(fetchImpl: typeof fetch = fetch): Offscreen
 		},
 
 		async fetchText(url) {
+			if (!isAllowed(url)) return { ok: false };
+
 			try {
 				const response = await request(url);
+				if (response === undefined) return { ok: false };
+
 				if (!response.ok) {
 					await response.body?.cancel();
 					return { ok: false };

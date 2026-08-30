@@ -1,5 +1,6 @@
 import { detectPlaylistKind, parseMediaPlaylist } from '../media/hls/parser';
 import { planHlsDownload } from '../processor/hls-download';
+import { type RunToken, createRunRegistry } from '../processor/run-registry';
 import { downloadSegments } from '../processor/segment-download';
 import {
 	type BackgroundToOffscreen,
@@ -29,11 +30,13 @@ const CANCELLED = 'ダウンロードを中止しました';
 
 type AssembleCommand = Extract<BackgroundToOffscreen, { kind: 'assemble-hls' }>;
 
-const fetcher = createSegmentFetcher();
-
-/** 進行中の組み立て。中止の要求を受け取るために持つ。 */
-const running = new Set<string>();
-const cancelled = new Set<string>();
+/**
+ * 進行中の組み立て。
+ *
+ * 同じタスク ID で走り直したときに旧実行と混ざらないよう、世代で区別する
+ * （`processor/run-registry.ts`）。
+ */
+const runs = createRunRegistry();
 
 /**
  * 進捗を通知する間隔（ms）。
@@ -50,13 +53,11 @@ function notify(message: OffscreenToBackground): void {
 	});
 }
 
-function finish(taskId: string): void {
-	running.delete(taskId);
-	cancelled.delete(taskId);
-}
+function fail(taskId: string, run: RunToken, reason: string): void {
+	// 旧実行の失敗で、走り直している実行を巻き込まない
+	if (!runs.isCurrent(taskId, run)) return;
 
-function fail(taskId: string, reason: string): void {
-	finish(taskId);
+	runs.end(taskId, run);
 	notify({ kind: 'assembly-failed', taskId, reason });
 }
 
@@ -75,31 +76,31 @@ function notifyDone(taskId: string, objectUrl: string, bytes: number): void {
 async function assemble(command: AssembleCommand): Promise<void> {
 	const { taskId, playlistUrl, maxBytes, allowPrivateHosts } = command;
 
-	// 前回の中止指示を持ち越さない。同じ ID で再試行されることがある
-	cancelled.delete(taskId);
-	running.add(taskId);
+	const run = runs.start(taskId);
+	// 取得の宛先は依頼ごとに決まる。使い回さず、この実行のためだけに作る
+	const fetcher = createSegmentFetcher({ allowPrivateHosts });
 
 	const manifest = await fetcher.fetchText(playlistUrl);
 	if (!manifest.ok) {
-		fail(taskId, PLAYLIST_FAILED);
+		fail(taskId, run, PLAYLIST_FAILED);
 		return;
 	}
 
 	// Master Playlist を渡されたら、画質が未確定のまま押されている
 	if (detectPlaylistKind(manifest.text) === 'master') {
-		fail(taskId, MASTER_PLAYLIST);
+		fail(taskId, run, MASTER_PLAYLIST);
 		return;
 	}
 
 	const parsed = parseMediaPlaylist(manifest.text, playlistUrl);
 	if (!parsed.ok) {
-		fail(taskId, NOT_A_PLAYLIST);
+		fail(taskId, run, NOT_A_PLAYLIST);
 		return;
 	}
 
 	const plan = planHlsDownload(parsed.value, { allowPrivateHosts });
 	if (!plan.ok) {
-		fail(taskId, plan.error.reason);
+		fail(taskId, run, plan.error.reason);
 		return;
 	}
 
@@ -111,27 +112,36 @@ async function assemble(command: AssembleCommand): Promise<void> {
 		fetcher,
 		maxBytes,
 		onProgress: (completed, bytes) => {
+			if (!runs.isCurrent(taskId, run)) return;
+
 			const now = Date.now();
 			if (completed < total && now - lastNotifiedAt < PROGRESS_INTERVAL_MS) return;
 
 			lastNotifiedAt = now;
 			notify({ kind: 'assembly-progress', taskId, completed, total, bytes });
 		},
-		isCancelled: () => cancelled.has(taskId),
+		// 走り直された旧実行も、ここで自分から降りる
+		isCancelled: () => run.cancelled || !runs.isCurrent(taskId, run),
 	});
 
 	if (!fetched.ok) {
 		if (fetched.error.type === 'cancelled') {
-			fail(taskId, CANCELLED);
+			fail(taskId, run, CANCELLED);
 			return;
 		}
-		fail(taskId, fetched.error.type === 'too-large' ? TOO_LARGE : FETCH_FAILED);
+		fail(taskId, run, fetched.error.type === 'too-large' ? TOO_LARGE : FETCH_FAILED);
 		return;
 	}
 
 	const assembled = assembleBlob(fetched.value);
-	finish(taskId);
 
+	// 走り直された旧実行の結果は渡さない。渡すと新しい実行の結果として扱われる
+	if (!runs.isCurrent(taskId, run)) {
+		releaseObjectUrl(assembled.objectUrl);
+		return;
+	}
+
+	runs.end(taskId, run);
 	notifyDone(taskId, assembled.objectUrl, assembled.bytes);
 }
 
@@ -145,14 +155,15 @@ chrome.runtime.onMessage.addListener((raw, sender) => {
 
 	if (command.kind === 'assemble-hls') {
 		void assemble(command).catch(() => {
-			fail(command.taskId, FETCH_FAILED);
+			// 例外で降りたときも、走っている実行として残さない
+			const run = runs.start(command.taskId);
+			fail(command.taskId, run, FETCH_FAILED);
 		});
 		return false;
 	}
 
 	if (command.kind === 'cancel-assembly') {
-		// 走っていないものを覚えても、次の再試行を邪魔するだけ
-		if (running.has(command.taskId)) cancelled.add(command.taskId);
+		runs.cancel(command.taskId);
 		return false;
 	}
 

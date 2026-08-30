@@ -76,6 +76,36 @@ describe('isPrivateHostUrl', () => {
 		expect(isPrivateHostUrl('http://169.254.169.254/latest/meta-data/')).toBe(true);
 	});
 
+	it('末尾のドット付きでも見分ける', () => {
+		// http://localhost./a の hostname は "localhost." になる
+		expect(isPrivateHostUrl('http://localhost./a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://nas.local./a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://x.internal../a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://127.0.0.1./a.ts')).toBe(true);
+	});
+
+	it('10 進・16 進表記の IPv4 を拒む', () => {
+		// 2130706433 は 127.0.0.1。通常の URL には現れない形
+		expect(isPrivateHostUrl('http://2130706433/a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://0x7f000001/a.ts')).toBe(true);
+	});
+
+	it('IPv4 射影の IPv6 アドレスを見分ける', () => {
+		expect(isPrivateHostUrl('http://[::ffff:127.0.0.1]/a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://[::ffff:7f00:1]/a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://[::ffff:192.168.0.1]/a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://[::ffff:8.8.8.8]/a.ts')).toBe(false);
+	});
+
+	it('形が読み取れない射影アドレスは安全側へ倒す', () => {
+		expect(isPrivateHostUrl('http://[::ffff:1]/a.ts')).toBe(true);
+	});
+
+	it('リンクローカルの IPv6 を見分ける', () => {
+		expect(isPrivateHostUrl('http://[fe80::1]/a.ts')).toBe(true);
+		expect(isPrivateHostUrl('http://[2001:db8::1]/a.ts')).toBe(false);
+	});
+
 	it('公開ホストは通す', () => {
 		expect(isPrivateHostUrl('https://cdn.example.com/a.ts')).toBe(false);
 		expect(isPrivateHostUrl('https://172.32.0.1/a.ts')).toBe(false);

@@ -227,11 +227,15 @@ export class DownloadManager {
 	 */
 	async forgetTab(tabId: number): Promise<void> {
 		await this.enqueue(async () => {
-			const tasks = await this.repository.findAll();
-			const dropped = tasks.filter((task) => task.tabId === tabId);
-			if (dropped.length === 0) return;
+			const own = splitByTab(await this.repository.findAll(), tabId);
+			if (own.mine.length === 0) return;
 
-			await this.repository.saveAll(tasks.filter((task) => task.tabId !== tabId));
+			// **ブラウザへ渡した Blob を保存中のタスクは残す。**
+			// ここで手放すとオブジェクト URL を解放する者が居なくなり、
+			// 解放すれば読み込み中の保存が壊れる。完了を見届けてから解放する
+			const [retained, dropped] = partition(own.mine, holdsBlobDownload);
+
+			await this.repository.saveAll([...own.others, ...retained]);
 			this.onTasksChanged(tabId, []);
 
 			// 拡張機能の中に閉じた資源は道連れにする。
@@ -488,6 +492,31 @@ export class DownloadManager {
 		);
 		return result;
 	}
+}
+
+/** ブラウザが Blob を読んでいる最中か。解放を待つ必要がある。 */
+function holdsBlobDownload(task: DownloadTask): boolean {
+	return task.objectUrl !== undefined && task.browserDownloadId !== undefined && isActive(task);
+}
+
+function splitByTab(
+	tasks: readonly DownloadTask[],
+	tabId: number,
+): { mine: DownloadTask[]; others: DownloadTask[] } {
+	return {
+		mine: tasks.filter((task) => task.tabId === tabId),
+		others: tasks.filter((task) => task.tabId !== tabId),
+	};
+}
+
+function partition(
+	tasks: readonly DownloadTask[],
+	predicate: (task: DownloadTask) => boolean,
+): [DownloadTask[], DownloadTask[]] {
+	const matched: DownloadTask[] = [];
+	const rest: DownloadTask[] = [];
+	for (const task of tasks) (predicate(task) ? matched : rest).push(task);
+	return [matched, rest];
 }
 
 function forTab(tasks: readonly DownloadTask[], tabId: number): DownloadTask[] {

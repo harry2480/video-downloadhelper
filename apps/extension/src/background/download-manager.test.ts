@@ -563,13 +563,37 @@ describe('組み立ての通知', () => {
 		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
 	});
 
-	it('タブを閉じたら組み立てを止めてオブジェクト URL を解放する', async () => {
+	it('保存中のオブジェクト URL はタブを閉じても解放しない', async () => {
+		// 読み込み中に失効させると、保存されたファイルが壊れる
 		const { harness, taskId } = await startAssembly();
 		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
 
 		await harness.manager.forgetTab(TAB_ID);
 
+		expect(harness.released).toEqual([]);
+		expect(harness.tasks).toHaveLength(1);
+	});
+
+	it('タブを閉じた後でも保存の完了を見届けて解放する', async () => {
+		const { harness, taskId } = await startAssembly();
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+		await harness.manager.forgetTab(TAB_ID);
+
+		harness.setSnapshots([{ downloadId: 1, state: 'complete', bytesReceived: 10, totalBytes: 10 }]);
+		await harness.manager.refresh();
+
 		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
+	});
+
+	it('保存が始まっていないタスクはタブを閉じたら解放する', async () => {
+		const { harness, taskId } = await startAssembly();
+		harness.failStart({ reason: 'denied' });
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+		harness.released.length = 0;
+
+		await harness.manager.forgetTab(TAB_ID);
+
+		expect(harness.tasks).toHaveLength(0);
 	});
 
 	it('組み立て中にタブを閉じたら Offscreen へ中止を伝える', async () => {

@@ -50,3 +50,42 @@ export async function readTextWithinLimit(
 
 	return { ok: true, text: new TextDecoder().decode(merged) };
 }
+
+/**
+ * 上限を超えない範囲で本文をバイト列として読む。
+ *
+ * **`response.arrayBuffer()` を使わないこと。** Content-Length を返さない応答では
+ * 本文全体を確保してから返るため、確保後に大きさを判定しても手遅れになる。
+ */
+export async function readBytesWithinLimit(
+	body: ReadableStream<Uint8Array> | null,
+	maxBytes: number,
+): Promise<{ ok: true; bytes: Uint8Array<ArrayBuffer> } | { ok: false }> {
+	if (body === null) return { ok: true, bytes: new Uint8Array(new ArrayBuffer(0)) };
+
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+
+	for (;;) {
+		const result = await reader.read();
+		if (result.done) break;
+
+		const value = result.value;
+		total += value.byteLength;
+		if (total > maxBytes) {
+			await reader.cancel();
+			return { ok: false };
+		}
+		chunks.push(value);
+	}
+
+	const merged = new Uint8Array(new ArrayBuffer(total));
+	let offset = 0;
+	for (const chunk of chunks) {
+		merged.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+
+	return { ok: true, bytes: merged };
+}
