@@ -61,7 +61,8 @@ export type HlsSegment = {
 
 export type HlsEncryption =
 	| { method: 'none' }
-	| { method: 'aes-128'; keyUri: string; iv?: string }
+	/** キー URI が欠けている場合もある（復号できないことに変わりはない） */
+	| { method: 'aes-128'; keyUri?: string; iv?: string }
 	/** Widevine / FairPlay / PlayReady / SAMPLE-AES。復号・回避は実装しない */
 	| { method: 'drm'; reason: string };
 

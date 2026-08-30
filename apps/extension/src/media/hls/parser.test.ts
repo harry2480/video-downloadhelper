@@ -520,14 +520,16 @@ seg.ts
 			expect(encryption).toEqual({ method: 'drm', reason: 'METHOD=SAMPLE-AES' });
 		});
 
-		it('AES-128 で URI を欠く壊れた鍵指定を暗号化なしのまま扱う', () => {
+		it('AES-128 で URI を欠く鍵指定も暗号化として扱う', () => {
+			// 復号できないことに変わりはない。none のまま通すと
+			// 暗号文をそのまま連結して保存してしまう
 			const content = `#EXTM3U
 #EXT-X-KEY:METHOD=AES-128
 #EXTINF:6.0,
 seg.ts
 #EXT-X-ENDLIST`;
 			expect(unwrap(parseMediaPlaylist(content, MEDIA_BASE)).encryption).toEqual({
-				method: 'none',
+				method: 'aes-128',
 			});
 		});
 	});

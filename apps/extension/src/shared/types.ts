@@ -162,6 +162,14 @@ export type DownloadTask = {
 	/** ブラウザのダウンロード ID。取得を開始できた場合のみ持つ */
 	browserDownloadId?: number;
 
+	/**
+	 * Offscreen Document が発行したオブジェクト URL（HLS の組み立て結果）。
+	 *
+	 * `chrome.downloads` が読み終わるまで生かしておく必要があるため、
+	 * Service Worker の停止をまたいで解放できるようここに持つ。
+	 */
+	objectUrl?: string;
+
 	/** 一覧の並び順に使う（epoch ms） */
 	startedAt: number;
 };

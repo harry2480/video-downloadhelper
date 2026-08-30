@@ -48,9 +48,10 @@ describe('resolveDownloadUrl', () => {
 });
 
 describe('downloadRejectionReason', () => {
-	it('直接メディアは保存できる', () => {
+	it('直接メディアと HLS は保存できる', () => {
 		expect(downloadRejectionReason(media())).toBeUndefined();
 		expect(downloadRejectionReason(media({ type: 'audio' }))).toBeUndefined();
+		expect(downloadRejectionReason(media({ type: 'hls', manifestResolved: true }))).toBeUndefined();
 		expect(isDownloadable(media())).toBe(true);
 	});
 
@@ -64,8 +65,13 @@ describe('downloadRejectionReason', () => {
 		);
 	});
 
-	it('HLS / DASH はまだ保存できない', () => {
-		expect(downloadRejectionReason(media({ type: 'hls' }))).toContain('まだ');
+	it('解析前の HLS は保存させない', () => {
+		// Master Playlist を組み立てに渡すことになり、必ず失敗する
+		expect(downloadRejectionReason(media({ type: 'hls' }))).toContain('画質を確認');
+	});
+
+	it('DASH はまだ保存できない', () => {
+		// 映像と音声の結合が要るため Phase 2
 		expect(downloadRejectionReason(media({ type: 'dash' }))).toContain('まだ');
 	});
 
@@ -84,14 +90,15 @@ describe('downloadRejectionReason', () => {
 
 describe('isPendingSupport', () => {
 	it('未対応の形式だけを準備中として扱う', () => {
-		expect(isPendingSupport(media({ type: 'hls' }))).toBe(true);
+		expect(isPendingSupport(media({ type: 'dash' }))).toBe(true);
 		expect(isPendingSupport(media())).toBe(false);
+		expect(isPendingSupport(media({ type: 'hls', manifestResolved: true }))).toBe(false);
 	});
 
 	it('DRM や取得失敗は準備中に含めない', () => {
 		// 「準備中」と出すと、待てば対応されるかのように読める
-		expect(isPendingSupport(media({ type: 'hls', drm: true }))).toBe(false);
-		expect(isPendingSupport(media({ type: 'hls', unsupportedReason: '取得できません' }))).toBe(
+		expect(isPendingSupport(media({ type: 'dash', drm: true }))).toBe(false);
+		expect(isPendingSupport(media({ type: 'dash', unsupportedReason: '取得できません' }))).toBe(
 			false,
 		);
 	});

@@ -403,13 +403,41 @@ describe('ダウンロード', () => {
 		expect(port.sent).toContainEqual({ kind: 'retry-download', taskId: 'task-1' });
 	});
 
-	it('HLS には保存ボタンを出さない', async () => {
-		// Phase 1 はセグメント結合に未対応。押せるのに保存できない状態を作らない
+	it('HLS にも保存ボタンを出す', async () => {
+		// セグメントの取得・結合は Offscreen Document が担う
 		const port = renderApp();
-		port.emit({ kind: 'media-list', media: [media({ type: 'hls' })], blocked: false });
+		port.emit({
+			kind: 'media-list',
+			media: [media({ type: 'hls', manifestResolved: true })],
+			blocked: false,
+		});
+
+		expect(await screen.findByRole('button', { name: '保存' })).toBeInTheDocument();
+	});
+
+	it('DASH には保存ボタンを出さない', async () => {
+		// 押せるのに保存できない状態を作らない
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [media({ type: 'dash' })], blocked: false });
 
 		expect(await screen.findByText(/準備中/)).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+	});
+
+	it('セグメントの取得中は進捗を出す', async () => {
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [media({ type: 'hls', manifestResolved: true })],
+			blocked: false,
+		});
+		port.emit({
+			kind: 'download-updated',
+			tasks: [task({ status: 'processing', progress: 50, downloadedBytes: 500 })],
+		});
+
+		expect(await screen.findByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+		expect(screen.getByRole('button', { name: '中止' })).toBeInTheDocument();
 	});
 
 	it('選択中の品質が保存できないなら保存ボタンを出さない', async () => {

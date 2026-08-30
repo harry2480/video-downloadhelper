@@ -1,4 +1,5 @@
 import type { DetectedMedia, DownloadRequest, DownloadTask, MediaElementCandidate } from './types';
+import { isHttpUrl } from './utils';
 
 /**
  * コンテキスト間通信の単一の窓口。
@@ -44,6 +45,43 @@ export type BackgroundToPopup =
 			/** 当該タブのダウンロードタスク全件。差分ではなく毎回すべて送る */
 			tasks: DownloadTask[];
 	  };
+
+/**
+ * Background から Offscreen Document への指示。
+ *
+ * セグメント取得と Blob 生成は Offscreen でしか行えない（要件定義 2.6）。
+ */
+export type BackgroundToOffscreen =
+	| {
+			kind: 'assemble-hls';
+			taskId: string;
+			/** Media Playlist の絶対 URL */
+			playlistUrl: string;
+			/** 合計サイズの上限（バイト） */
+			maxBytes: number;
+			/**
+			 * プライベートネットワーク宛のセグメントを許すか。
+			 * 検出元のメディア URL 自体がプライベートな場合にのみ真になる
+			 */
+			allowPrivateHosts: boolean;
+	  }
+	| { kind: 'cancel-assembly'; taskId: string }
+	| { kind: 'release-object-url'; objectUrl: string };
+
+/** Offscreen Document から Background への通知。 */
+export type OffscreenToBackground =
+	| {
+			kind: 'assembly-progress';
+			taskId: string;
+			/** 取得済みのセグメント数 */
+			completed: number;
+			/** セグメントの総数 */
+			total: number;
+			bytes: number;
+	  }
+	| { kind: 'assembly-done'; taskId: string; objectUrl: string; bytes: number }
+	/** 理由はユーザーへ出せる文言にしてから送る */
+	| { kind: 'assembly-failed'; taskId: string; reason: string };
 
 /** Popup が Background へ張る Port の名前。 */
 export const POPUP_PORT_NAME = 'popup';
@@ -159,6 +197,90 @@ export function parsePopupMessage(raw: unknown): PopupToBackground | undefined {
 		const taskId = parseId(raw.taskId);
 		if (taskId === undefined) return undefined;
 		return { kind: raw.kind, taskId };
+	}
+
+	return undefined;
+}
+
+function parseCount(value: unknown): number | undefined {
+	if (typeof value !== 'number') return undefined;
+	if (!Number.isFinite(value) || value < 0) return undefined;
+	return value;
+}
+
+/**
+ * Offscreen Document から届いたメッセージを検証する。
+ *
+ * 送信元は Background 側で検証済みだが、形が合わない値をそのまま
+ * タスクの状態へ反映しない。進捗やサイズは表示と判定に使う。
+ */
+export function parseOffscreenMessage(raw: unknown): OffscreenToBackground | undefined {
+	if (!isRecord(raw)) return undefined;
+
+	const taskId = parseId(raw.taskId);
+	if (taskId === undefined) return undefined;
+
+	if (raw.kind === 'assembly-progress') {
+		const completed = parseCount(raw.completed);
+		const total = parseCount(raw.total);
+		const bytes = parseCount(raw.bytes);
+		if (completed === undefined || total === undefined || bytes === undefined) return undefined;
+
+		return { kind: 'assembly-progress', taskId, completed, total, bytes };
+	}
+
+	if (raw.kind === 'assembly-done') {
+		const objectUrl = parseId(raw.objectUrl);
+		const bytes = parseCount(raw.bytes);
+		if (objectUrl === undefined || bytes === undefined) return undefined;
+
+		// 組み立て結果は必ずオブジェクト URL。そのまま chrome.downloads へ渡すため、
+		// 信頼境界で形を確かめておく
+		if (!objectUrl.startsWith('blob:')) return undefined;
+
+		return { kind: 'assembly-done', taskId, objectUrl, bytes };
+	}
+
+	if (raw.kind === 'assembly-failed') {
+		const reason = parseId(raw.reason);
+		if (reason === undefined) return undefined;
+
+		return { kind: 'assembly-failed', taskId, reason };
+	}
+
+	return undefined;
+}
+
+/** Background から届いた指示を検証する（Offscreen 側の受け口）。 */
+export function parseAssemblyCommand(raw: unknown): BackgroundToOffscreen | undefined {
+	if (!isRecord(raw)) return undefined;
+
+	if (raw.kind === 'assemble-hls') {
+		const taskId = parseId(raw.taskId);
+		const playlistUrl = parseId(raw.playlistUrl);
+		const maxBytes = parseCount(raw.maxBytes);
+		if (taskId === undefined || playlistUrl === undefined || maxBytes === undefined) {
+			return undefined;
+		}
+		if (!isHttpUrl(playlistUrl)) return undefined;
+
+		return {
+			kind: 'assemble-hls',
+			taskId,
+			playlistUrl,
+			maxBytes,
+			allowPrivateHosts: raw.allowPrivateHosts === true,
+		};
+	}
+
+	if (raw.kind === 'cancel-assembly') {
+		const taskId = parseId(raw.taskId);
+		return taskId === undefined ? undefined : { kind: 'cancel-assembly', taskId };
+	}
+
+	if (raw.kind === 'release-object-url') {
+		const objectUrl = parseId(raw.objectUrl);
+		return objectUrl === undefined ? undefined : { kind: 'release-object-url', objectUrl };
 	}
 
 	return undefined;

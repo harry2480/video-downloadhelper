@@ -1,4 +1,5 @@
 import type { MediaType } from '../shared/types';
+import { isHttpUrl } from '../shared/utils';
 import { getPathExtension } from './url';
 
 /**
@@ -119,5 +120,5 @@ export function isBlobUrl(url: string): boolean {
 
 /** 拡張機能から再取得できないスキームか。 */
 export function isFetchableUrl(url: string): boolean {
-	return /^https?:\/\//i.test(url);
+	return isHttpUrl(url);
 }

@@ -7,9 +7,11 @@ import {
 	resetDownloadTask,
 } from '../processor/download-task';
 import { buildFilename } from '../processor/filename';
+import type { AssemblerPort } from '../shared/ports/assembler.port';
 import type { DownloadStartFailure, DownloaderPort } from '../shared/ports/download.port';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';
 import type { DetectedMedia, DownloadRequest, DownloadTask, MediaVariant } from '../shared/types';
+import { isPrivateHostUrl } from '../shared/utils';
 import type { MediaRegistry } from './media-registry';
 
 /**
@@ -34,7 +36,17 @@ const MAX_TASKS = 100;
  */
 const STALE_QUEUED_MS = 60_000;
 
+/**
+ * 1 ファイルあたりの上限（要件定義 2.6）。
+ *
+ * HLS は取得したセグメントを Blob へ組み立ててから保存するため、
+ * 全体がメモリに載る。逐次書き込み（File System Access API）は将来の拡張。
+ */
+const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+
 const MEDIA_GONE = 'メディアが見つかりませんでした（ページを再読み込みしてください）';
+const TOO_LARGE = '推定サイズが上限（2GB）を超えるため保存できません';
+const ASSEMBLY_FAILED = 'セグメントの取得を開始できませんでした';
 const LOST = 'ダウンロードの状況を取得できなくなりました';
 const START_FAILED = 'ダウンロードを開始できませんでした';
 const INVALID_FILENAME = 'ファイル名が受け付けられませんでした';
@@ -51,6 +63,7 @@ export class DownloadManager {
 
 	constructor(
 		private readonly downloader: DownloaderPort,
+		private readonly assembler: AssemblerPort,
 		private readonly repository: DownloadTaskRepository,
 		private readonly registry: MediaRegistry,
 		private readonly onTasksChanged: (tabId: number, tasks: DownloadTask[]) => void,
@@ -76,8 +89,13 @@ export class DownloadManager {
 			const variant = findVariant(media, request.variantId);
 			const task = this.createTask(tabId, request, media, variant);
 
-			const target = media === undefined ? undefined : resolveDownloadUrl(media, variant);
-			const rejection = media === undefined ? MEDIA_GONE : downloadRejectionReason(media, variant);
+			if (media === undefined) {
+				await this.commit([markDownloadFailed(task, MEDIA_GONE), ...tasks], tabId);
+				return;
+			}
+
+			const target = resolveDownloadUrl(media, variant);
+			const rejection = downloadRejectionReason(media, variant);
 
 			if (rejection !== undefined || target === undefined) {
 				await this.commit([markDownloadFailed(task, rejection ?? MEDIA_GONE), ...tasks], tabId);
@@ -85,7 +103,7 @@ export class DownloadManager {
 			}
 
 			await this.commit([task, ...tasks], tabId);
-			await this.begin(task, target);
+			await this.beginTask(task, media, variant, target);
 		});
 	}
 
@@ -99,6 +117,10 @@ export class DownloadManager {
 			if (target.browserDownloadId !== undefined) {
 				await this.downloader.cancel(target.browserDownloadId);
 			}
+			if (target.status === 'processing') {
+				await this.assembler.cancel(target.id);
+			}
+			await this.releaseUrl(target.objectUrl);
 
 			await this.commit(replace(tasks, markDownloadCancelled(target)), target.tabId);
 		});
@@ -116,8 +138,13 @@ export class DownloadManager {
 			);
 			const variant = findVariant(media, target.variantId);
 
-			const url = media === undefined ? undefined : resolveDownloadUrl(media, variant);
-			const rejection = media === undefined ? MEDIA_GONE : downloadRejectionReason(media, variant);
+			if (media === undefined) {
+				await this.commit(replace(tasks, markDownloadFailed(target, MEDIA_GONE)), target.tabId);
+				return;
+			}
+
+			const url = resolveDownloadUrl(media, variant);
+			const rejection = downloadRejectionReason(media, variant);
 
 			if (rejection !== undefined || url === undefined) {
 				await this.commit(
@@ -129,7 +156,7 @@ export class DownloadManager {
 
 			const restarted = resetDownloadTask(target, this.now());
 			await this.commit(replace(tasks, restarted), restarted.tabId);
-			await this.begin(restarted, url);
+			await this.beginTask(restarted, media, variant, url);
 		});
 	}
 
@@ -168,7 +195,9 @@ export class DownloadManager {
 		const now = this.now();
 
 		const next = tasks.map((task) => {
-			if (!isActive(task) || task.browserDownloadId !== undefined) return task;
+			// 組み立て中（HLS）は browserDownloadId を持たないまま長く走る。
+			// 掃除の対象は「依頼を出す直前で止まった」開始待ちだけにする
+			if (task.status !== 'queued') return task;
 			if (now - task.startedAt < STALE_QUEUED_MS) return task;
 
 			changedTabs.add(task.tabId);
@@ -198,13 +227,30 @@ export class DownloadManager {
 	 */
 	async forgetTab(tabId: number): Promise<void> {
 		await this.enqueue(async () => {
-			const tasks = await this.repository.findAll();
-			const remaining = tasks.filter((task) => task.tabId !== tabId);
-			if (remaining.length === tasks.length) return;
+			const own = splitByTab(await this.repository.findAll(), tabId);
+			if (own.mine.length === 0) return;
 
-			await this.repository.saveAll(remaining);
+			// **ブラウザへ渡した Blob を保存中のタスクは残す。**
+			// ここで手放すとオブジェクト URL を解放する者が居なくなり、
+			// 解放すれば読み込み中の保存が壊れる。完了を見届けてから解放する
+			const [retained, dropped] = partition(own.mine, holdsBlobDownload);
+
+			await this.repository.saveAll([...own.others, ...retained]);
 			this.onTasksChanged(tabId, []);
+
+			// 拡張機能の中に閉じた資源は道連れにする。
+			// ブラウザ側の保存だけはページの寿命と独立して続く
+			for (const task of dropped) {
+				if (task.status === 'processing') await this.assembler.cancel(task.id);
+				await this.releaseUrl(task.objectUrl);
+			}
 		});
+	}
+
+	/** オブジェクト URL があれば解放する。 */
+	private async releaseUrl(objectUrl: string | undefined): Promise<void> {
+		if (objectUrl === undefined) return;
+		await this.assembler.release(objectUrl);
 	}
 
 	private createTask(
@@ -226,6 +272,119 @@ export class DownloadManager {
 		};
 	}
 
+	/** 組み立ての進捗を取り込む（Offscreen からの通知）。 */
+	async handleAssemblyProgress(
+		taskId: string,
+		completed: number,
+		total: number,
+		bytes: number,
+	): Promise<void> {
+		await this.enqueue(async () => {
+			const tasks = await this.repository.findAll();
+			const target = tasks.find((task) => task.id === taskId);
+			if (target === undefined || !isActive(target)) return;
+
+			const progress = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+			const updated: DownloadTask = {
+				...target,
+				status: 'processing',
+				progress,
+				downloadedBytes: bytes,
+			};
+			if (!hasChanged(target, updated)) return;
+
+			await this.commit(replace(tasks, updated), target.tabId);
+		});
+	}
+
+	/** 組み立てが終わった。出来上がった Blob をブラウザへ渡して保存する。 */
+	async handleAssemblyDone(taskId: string, objectUrl: string, bytes: number): Promise<void> {
+		await this.enqueue(async () => {
+			const tasks = await this.repository.findAll();
+			const target = tasks.find((task) => task.id === taskId);
+
+			// 組み立て中に中止・タブ破棄が起きていることがある。作った Blob は捨てる
+			if (target === undefined || !isActive(target)) {
+				await this.assembler.release(objectUrl);
+				return;
+			}
+
+			const ready: DownloadTask = { ...target, objectUrl, totalBytes: bytes, progress: 100 };
+			await this.commit(replace(tasks, ready), ready.tabId);
+			await this.begin(ready, objectUrl);
+		});
+	}
+
+	/** 組み立てに失敗した。理由は Offscreen 側でユーザー向けの文言にしてある。 */
+	async handleAssemblyFailed(taskId: string, reason: string): Promise<void> {
+		await this.enqueue(async () => {
+			const tasks = await this.repository.findAll();
+			const target = tasks.find((task) => task.id === taskId);
+			if (target === undefined || !isActive(target)) return;
+
+			await this.commit(replace(tasks, markDownloadFailed(target, reason)), target.tabId);
+		});
+	}
+
+	/**
+	 * 取得を始める。直接保存できるものはブラウザへ、HLS は Offscreen へ渡す。
+	 *
+	 * HLS はセグメントを取得して結合する必要があり、`URL.createObjectURL` が
+	 * 使えない Service Worker では完結しない（要件定義 2.6）。
+	 */
+	private async beginTask(
+		task: DownloadTask,
+		media: DetectedMedia,
+		variant: MediaVariant | undefined,
+		url: string,
+	): Promise<void> {
+		if (media.type !== 'hls') {
+			await this.begin(task, url);
+			return;
+		}
+
+		// 取りかかる前に見込みで弾く。組み立て中にも実測で打ち切る
+		const estimated = variant?.estimatedSize ?? media.estimatedSize;
+		if (estimated !== undefined && estimated > MAX_TOTAL_BYTES) {
+			await this.failTask(task.id, TOO_LARGE);
+			return;
+		}
+
+		// **依頼と同時に processing にする。** 最初の進捗が届くまで queued のままだと、
+		// 開始待ちの掃除（`sweepStale`）に巻き込まれて取得済みのデータが無駄になる
+		await this.mark(task.id, (current) => ({ ...current, status: 'processing' }));
+
+		try {
+			await this.assembler.start({
+				taskId: task.id,
+				playlistUrl: url,
+				maxBytes: MAX_TOTAL_BYTES,
+				// ページが差し替えられない値で判断する。公開ページから
+				// LAN やループバックを叩かせないため
+				allowPrivateHosts: isPrivateHostUrl(media.sourceUrl),
+			});
+		} catch {
+			await this.failTask(task.id, ASSEMBLY_FAILED);
+		}
+	}
+
+	/** キューの中から呼ぶ前提で、1 件を書き換える。 */
+	private async mark(
+		taskId: string,
+		transform: (task: DownloadTask) => DownloadTask,
+	): Promise<void> {
+		const tasks = await this.repository.findAll();
+		const target = tasks.find((task) => task.id === taskId);
+		if (target === undefined) return;
+
+		await this.commit(replace(tasks, transform(target)), target.tabId);
+	}
+
+	/** キューの中から呼ぶ前提で、1 件を失敗にする。 */
+	private async failTask(taskId: string, reason: string): Promise<void> {
+		await this.mark(taskId, (task) => markDownloadFailed(task, reason));
+	}
+
 	/** ブラウザへ取得を依頼し、結果をタスクへ反映する。 */
 	private async begin(task: DownloadTask, url: string): Promise<void> {
 		const started = await this.downloader.start({ url, filename: task.filename });
@@ -234,13 +393,18 @@ export class DownloadManager {
 		// キューの中で実行されるため、依頼中に他の操作は割り込まない。
 		// ただし依頼が返るまでキューを占有する点は意識しておくこと
 		const current = tasks.find((item) => item.id === task.id);
-		if (current === undefined || !isActive(current)) return;
+		if (current === undefined || !isActive(current)) {
+			// 組み立て済みの Blob を渡せなかった。抱えたままにしない
+			await this.releaseUrl(task.objectUrl);
+			return;
+		}
 
 		if (!started.ok) {
 			await this.commit(
 				replace(tasks, markDownloadFailed(current, describe(started.error))),
 				task.tabId,
 			);
+			await this.releaseUrl(current.objectUrl);
 			return;
 		}
 
@@ -257,6 +421,7 @@ export class DownloadManager {
 		changedTabs: Set<number>,
 	): Promise<void> {
 		const snapshots = await this.downloader.query(ids);
+		const released: string[] = [];
 
 		const next = tasks.map((task) => {
 			const id = task.browserDownloadId;
@@ -274,11 +439,17 @@ export class DownloadManager {
 
 			if (!hasChanged(task, updated)) return task;
 
+			// 保存が終わったら Blob を解放する。持ち続けるとメモリに残り続ける
+			if (isActive(task) && !isActive(updated) && task.objectUrl !== undefined) {
+				released.push(task.objectUrl);
+			}
+
 			changedTabs.add(task.tabId);
 			return updated;
 		});
 
 		await this.saveAndNotify(next, changedTabs);
+		for (const objectUrl of released) await this.releaseUrl(objectUrl);
 	}
 
 	private async saveAndNotify(tasks: DownloadTask[], changedTabs: Set<number>): Promise<void> {
@@ -321,6 +492,31 @@ export class DownloadManager {
 		);
 		return result;
 	}
+}
+
+/** ブラウザが Blob を読んでいる最中か。解放を待つ必要がある。 */
+function holdsBlobDownload(task: DownloadTask): boolean {
+	return task.objectUrl !== undefined && task.browserDownloadId !== undefined && isActive(task);
+}
+
+function splitByTab(
+	tasks: readonly DownloadTask[],
+	tabId: number,
+): { mine: DownloadTask[]; others: DownloadTask[] } {
+	return {
+		mine: tasks.filter((task) => task.tabId === tabId),
+		others: tasks.filter((task) => task.tabId !== tabId),
+	};
+}
+
+function partition(
+	tasks: readonly DownloadTask[],
+	predicate: (task: DownloadTask) => boolean,
+): [DownloadTask[], DownloadTask[]] {
+	const matched: DownloadTask[] = [];
+	const rest: DownloadTask[] = [];
+	for (const task of tasks) (predicate(task) ? matched : rest).push(task);
+	return [matched, rest];
 }
 
 function forTab(tasks: readonly DownloadTask[], tabId: number): DownloadTask[] {
