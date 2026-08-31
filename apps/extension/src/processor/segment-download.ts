@@ -1,5 +1,5 @@
-import type { SegmentFetchFailure, SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
-import { type Result, err, ok } from '../shared/utils';
+import type { SegmentFetcherPort, SegmentFetchFailure } from '../shared/ports/segment-fetcher.port';
+import { err, ok, type Result } from '../shared/utils';
 
 /**
  * セグメントの取得制御（要件定義 2.6 の並列取得制御）。

@@ -1,6 +1,6 @@
 import { detectPlaylistKind, parseMediaPlaylist } from '../media/hls/parser';
 import { planHlsDownload } from '../processor/hls-download';
-import { type RunToken, createRunRegistry } from '../processor/run-registry';
+import { createRunRegistry, type RunToken } from '../processor/run-registry';
 import { downloadSegments } from '../processor/segment-download';
 import {
 	type BackgroundToOffscreen,

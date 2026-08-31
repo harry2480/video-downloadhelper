@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedMedia } from '../shared/types';
 import {
-	type DetectionInput,
-	type DetectionRejection,
 	applyManifestAnalysis,
 	applyManifestFailure,
 	createDetectedMedia,
+	type DetectionInput,
+	type DetectionRejection,
 	mergeDetectedMedia,
 	upsertDetectedMedia,
 } from './detected-media.model';

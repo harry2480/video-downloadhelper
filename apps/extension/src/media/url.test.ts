@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Result } from '../shared/utils';
 import {
-	type UrlError,
 	getPathExtension,
 	maskSensitiveParams,
 	resolveUrl,
 	toDedupeKey,
+	type UrlError,
 } from './url';
 
 function unwrap<T>(result: Result<T, UrlError>): T {

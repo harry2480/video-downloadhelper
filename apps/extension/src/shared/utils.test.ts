@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type Result, err, isHttpUrl, isOk, isPrivateHostUrl, ok } from './utils';
+import { err, isHttpUrl, isOk, isPrivateHostUrl, ok, type Result } from './utils';
 
 type ParseError = { type: 'invalid' };
 

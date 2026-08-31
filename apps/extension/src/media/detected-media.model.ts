@@ -1,5 +1,5 @@
 import type { DetectedMedia, DetectionSource, MediaType, MediaVariant } from '../shared/types';
-import { type Result, err, ok } from '../shared/utils';
+import { err, ok, type Result } from '../shared/utils';
 import { isBlockedUrl } from './blocklist';
 import { detectMediaType, isBlobUrl, isFetchableUrl, isSupportedMediaType } from './media-type';
 import { toDedupeKey } from './url';

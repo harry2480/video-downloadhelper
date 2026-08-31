@@ -1,4 +1,4 @@
-import type { DownloadSnapshot, DownloaderPort } from '../shared/ports/download.port';
+import type { DownloaderPort, DownloadSnapshot } from '../shared/ports/download.port';
 import { err, ok } from '../shared/utils';
 
 /**

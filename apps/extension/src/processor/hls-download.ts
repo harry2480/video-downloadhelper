@@ -1,5 +1,5 @@
 import type { ParsedMediaPlaylist } from '../media/hls/types';
-import { type Result, err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
+import { err, isHttpUrl, isPrivateHostUrl, ok, type Result } from '../shared/utils';
 
 /**
  * HLS の保存計画（要件定義 2.3）。
