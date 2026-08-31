@@ -1,7 +1,7 @@
 import { detectPlaylistKind, parseMediaPlaylist } from '../media/hls/parser';
 import { type HlsContainer, planHlsDownload } from '../processor/hls-download';
 import { type RunToken, createRunRegistry } from '../processor/run-registry';
-import { downloadSegments } from '../processor/segment-download';
+import { type SegmentDownloadError, downloadSegments } from '../processor/segment-download';
 import {
 	type BackgroundToOffscreen,
 	type OffscreenToBackground,
@@ -90,13 +90,25 @@ function notifyDone(
 		});
 }
 
-/** 取得の失敗を、そのままユーザーへ出せる文言にする。 */
-function describeFailure(error: { type: string; failure?: { reason: string } }): string {
-	if (error.type === 'too-large') return TOO_LARGE;
-	if (error.type === 'key-failed') return KEY_FAILED;
-	if (error.type === 'decrypt-failed') return DECRYPT_FAILED;
-	if (error.failure?.reason === 'range-not-satisfied') return RANGE_FAILED;
-	return FETCH_FAILED;
+/**
+ * 取得の失敗を、そのままユーザーへ出せる文言にする。
+ *
+ * 引数を `SegmentDownloadError` で受けて網羅させる。緩い型にすると、
+ * 種別を足したときに既定の文言へ黙って丸まる。
+ */
+function describeFailure(error: SegmentDownloadError): string {
+	switch (error.type) {
+		case 'too-large':
+			return TOO_LARGE;
+		case 'key-failed':
+			return KEY_FAILED;
+		case 'decrypt-failed':
+			return DECRYPT_FAILED;
+		case 'cancelled':
+			return CANCELLED;
+		case 'fetch-failed':
+			return error.failure.reason === 'range-not-satisfied' ? RANGE_FAILED : FETCH_FAILED;
+	}
 }
 
 async function assemble(command: AssembleCommand): Promise<void> {
@@ -153,10 +165,6 @@ async function assemble(command: AssembleCommand): Promise<void> {
 	});
 
 	if (!fetched.ok) {
-		if (fetched.error.type === 'cancelled') {
-			fail(taskId, run, CANCELLED);
-			return;
-		}
 		fail(taskId, run, describeFailure(fetched.error));
 		return;
 	}

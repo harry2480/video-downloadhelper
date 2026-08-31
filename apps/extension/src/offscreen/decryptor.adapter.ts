@@ -15,21 +15,12 @@ export function createDecryptor(): DecryptorPort {
 	return {
 		async decryptAesCbc(data, key, iv) {
 			try {
-				const cryptoKey = await crypto.subtle.importKey(
-					'raw',
-					// 鍵は使い回さない。取り違えを避けるため毎回 import する
-					key.slice().buffer,
-					ALGORITHM,
-					false,
-					['decrypt'],
-				);
+				// BufferSource をそのまま渡す。`.slice().buffer` は 1 セグメント
+				// （最大 64MB）ぶんの複製を毎回作るだけで、防御にもならない
+				const cryptoKey = await crypto.subtle.importKey('raw', key, ALGORITHM, false, ['decrypt']);
 
 				// WebCrypto は PKCS#7 のパディングを外して返す
-				const decrypted = await crypto.subtle.decrypt(
-					{ name: ALGORITHM, iv: iv.slice().buffer },
-					cryptoKey,
-					data.slice().buffer,
-				);
+				const decrypted = await crypto.subtle.decrypt({ name: ALGORITHM, iv }, cryptoKey, data);
 
 				return ok(new Uint8Array(decrypted));
 			} catch {

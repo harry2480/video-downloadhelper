@@ -25,6 +25,7 @@ function bytes(size: number, fill: number): Uint8Array<ArrayBuffer> {
 function createFetcher(options: { delays?: Record<string, number>; fail?: Set<string> } = {}) {
 	const requested: string[] = [];
 	const ranges: (SegmentFetchOptions['range'] | undefined)[] = [];
+	const limits: (number | undefined)[] = [];
 	let running = 0;
 	let peak = 0;
 
@@ -32,6 +33,7 @@ function createFetcher(options: { delays?: Record<string, number>; fail?: Set<st
 		async fetchBytes(url, fetchOptions) {
 			requested.push(url);
 			ranges.push(fetchOptions?.range);
+			limits.push(fetchOptions?.maxBytes);
 			running += 1;
 			peak = Math.max(peak, running);
 
@@ -51,7 +53,7 @@ function createFetcher(options: { delays?: Record<string, number>; fail?: Set<st
 		},
 	};
 
-	return { fetcher, requested, ranges, peak: () => peak };
+	return { fetcher, requested, ranges, limits, peak: () => peak };
 }
 
 const urls = (count: number) =>
@@ -285,6 +287,17 @@ describe('AES-128 の復号', () => {
 		if (!result.ok) return;
 		expect(result.value.map((part) => part[0])).toEqual([0xff, 0xff]);
 		expect(calls).toHaveLength(2);
+	});
+
+	it('鍵の取得に 16 バイトの上限を渡す', async () => {
+		// 読み切ってから長さを見ると、巨大な応答を返す鍵 URL で
+		// メモリを食い潰される
+		const { fetcher, requested, limits } = createFetcher();
+		const { decryptor } = createDecryptor();
+
+		await downloadSegments({ segments: encrypted(1), fetcher, decryptor, maxBytes: 1_000 });
+
+		expect(limits[requested.indexOf(KEY_URL)]).toBe(16);
 	});
 
 	it('同じ鍵は 1 回しか取得しない', async () => {

@@ -32,6 +32,15 @@ export type SegmentFetchOptions = {
 	 * 同じ内容を繰り返した壊れたファイルになるため、実装側で検証する。
 	 */
 	range?: FetchByteRange;
+
+	/**
+	 * この取得に許すバイト数の上限。
+	 *
+	 * 既定の上限（セグメント 1 本ぶん）より小さいものを取るときに使う。
+	 * 鍵は 16 バイトと決まっているのに、読み切ってから長さを見ると、
+	 * その間だけ巨大な応答をメモリへ載せることになる。
+	 */
+	maxBytes?: number;
 };
 
 export type SegmentFetcherPort = {

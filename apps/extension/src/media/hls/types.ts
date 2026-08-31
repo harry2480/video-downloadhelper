@@ -40,8 +40,8 @@ export type ParsedMasterPlaylist = {
 /**
  * セグメントの形式。
  *
- * Phase 1 では ts のみを対象とし、単純連結で .ts として出力する。
- * fmp4 は #EXT-X-MAP の初期化セグメントとの結合が必要なため Phase 2。
+ * ts は単純連結で .ts として出力する。fmp4 は #EXT-X-MAP の初期化
+ * セグメントを先頭に置いて連結し、.mp4 として出力する。
  */
 export type HlsSegmentFormat = 'ts' | 'fmp4' | 'unknown';
 
@@ -131,4 +131,6 @@ export type HlsParseError =
 	| { type: 'empty-playlist' }
 	| { type: 'no-variants' }
 	| { type: 'no-segments' }
-	| { type: 'invalid-uri'; input: string };
+	| { type: 'invalid-uri'; input: string }
+	/** #EXT-X-BYTERANGE の値を解決できない。範囲なしとして扱うと全体を取得してしまう */
+	| { type: 'invalid-byterange'; input: string };

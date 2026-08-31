@@ -385,6 +385,53 @@ seg0.m4s
 			});
 		});
 
+		it('BYTERANGE を解決できなければ失敗させる', () => {
+			// **範囲なしへ落とさない。** 落とすと計画も取得も「範囲指定なし」
+			// としか見えず、エラーにならないままファイル全体を取得して連結する
+			const content = '#EXTM3U\n#EXTINF:6.0,\n#EXT-X-BYTERANGE:abc@0\nseg.ts\n#EXT-X-ENDLIST';
+
+			expect(parseMediaPlaylist(content, MEDIA_BASE)).toEqual({
+				ok: false,
+				error: { type: 'invalid-byterange', input: 'abc@0' },
+			});
+		});
+
+		it('直前の終端が分からないオフセット省略形も失敗させる', () => {
+			const content = '#EXTM3U\n#EXTINF:6.0,\n#EXT-X-BYTERANGE:100\nseg.ts\n#EXT-X-ENDLIST';
+
+			expect(parseMediaPlaylist(content, MEDIA_BASE)).toEqual({
+				ok: false,
+				error: { type: 'invalid-byterange', input: '100' },
+			});
+		});
+
+		it('#EXT-X-MAP の終端からオフセット省略形が続く', () => {
+			// 初期化セグメントと本体が同じファイルを共有する構成。
+			// MAP の終端を覚えていないと、続く省略形が解決できない
+			const content = `#EXTM3U
+#EXT-X-MAP:URI="all.mp4",BYTERANGE="800@0"
+#EXTINF:6.0,
+#EXT-X-BYTERANGE:1000
+all.mp4
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.byteRange).toEqual({ length: 1000, offset: 800 });
+		});
+
+		it('#EXT-X-MAP の BYTERANGE が壊れていれば失敗させる', () => {
+			const content = `#EXTM3U
+#EXT-X-MAP:URI="all.mp4",BYTERANGE="xyz"
+#EXTINF:6.0,
+seg.m4s
+#EXT-X-ENDLIST`;
+
+			expect(parseMediaPlaylist(content, MEDIA_BASE)).toEqual({
+				ok: false,
+				error: { type: 'invalid-byterange', input: 'xyz' },
+			});
+		});
+
 		it('#EXT-X-MAP の切り替わりをセグメントごとに追う', () => {
 			// 不連続点をまたいで初期化セグメントが変わる構成がある
 			const content = `#EXTM3U
@@ -522,6 +569,21 @@ b.ts
 			expect(parsed.segments[0]?.sequenceNumber).toBe(0);
 		});
 
+		it('先頭セグメントより後ろにあっても番号を揃える', () => {
+			// RFC は先頭より前に置くことを求めるが、違反していても
+			// 番号がずれると復号は通るのに中身が壊れる
+			const content = `#EXTM3U
+#EXTINF:6.0,
+a.ts
+#EXT-X-MEDIA-SEQUENCE:10
+#EXTINF:6.0,
+b.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments.map((segment) => segment.sequenceNumber)).toEqual([10, 11]);
+		});
+
 		it('省略時は 0 から始める', () => {
 			const parsed = unwrap(parseMediaPlaylist(VOD_TS, MEDIA_BASE));
 
@@ -628,6 +690,30 @@ seg.m4s
 
 			expect(parsed.segments[0]?.key).toEqual({});
 			expect(parsed.encryption).toEqual({ method: 'aes-128' });
+		});
+
+		it('KEYFORMAT が identity 以外なら鍵を取りにいかない', () => {
+			// 既定の identity は「URI が 16 バイトの鍵そのもの」。別形式の
+			// 鍵サーバーへ Cookie 付きで取りに行っても復号できない
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="https://drm.example.com/k",KEYFORMAT="com.example.drm"
+#EXTINF:6.0,
+seg.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.key).toEqual({});
+		});
+
+		it('KEYFORMAT=identity は鍵として扱う', () => {
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="k.bin",KEYFORMAT="identity"
+#EXTINF:6.0,
+seg.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.key?.keyUri).toBe('https://cdn.example.com/hls/1080p/k.bin');
 		});
 
 		it('METHOD=NONE を none として扱う', () => {

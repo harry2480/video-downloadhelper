@@ -94,8 +94,12 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 					return err({ reason: 'range-not-satisfied' });
 				}
 
-				const limit =
-					range === undefined ? MAX_SEGMENT_BYTES : Math.min(range.length, MAX_SEGMENT_BYTES);
+				// 呼び出し側の上限・範囲の長さ・既定の上限のうち最も小さいものを使う
+				const limit = Math.min(
+					fetchOptions?.maxBytes ?? Number.POSITIVE_INFINITY,
+					range?.length ?? Number.POSITIVE_INFINITY,
+					MAX_SEGMENT_BYTES,
+				);
 
 				const declared = Number(response.headers.get('content-length'));
 				if (Number.isFinite(declared) && declared > limit) {

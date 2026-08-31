@@ -108,6 +108,58 @@ describe('planHlsDownload', () => {
 		expect(rejected.error.reason).toContain('多すぎます');
 	});
 
+	it('初期化セグメントを展開した後の本数にも上限を掛ける', () => {
+		// #EXT-X-MAP はセグメントごとに切り替えられる。展開前だけを見ると、
+		// 1 回の保存操作で実際に出る取得回数が倍になる
+		const many = Array.from({ length: 15_000 }, (_, index) =>
+			segment({
+				uri: `https://cdn.example.com/seg${index}.m4s`,
+				sequenceNumber: index,
+				initSegment: { uri: `https://cdn.example.com/init${index}.mp4` },
+			}),
+		);
+
+		const rejected = planHlsDownload(playlist({ segments: many }));
+
+		expect(rejected.ok).toBe(false);
+		if (rejected.ok) return;
+		expect(rejected.error.reason).toContain('多すぎます');
+	});
+
+	it('鍵の種類が多すぎるなら対応しない', () => {
+		// 鍵は URL ごとに 1 回しか取らないが、全部違えば重複排除が効かず、
+		// セグメント数と同じだけリクエストが出る
+		const many = Array.from({ length: 300 }, (_, index) =>
+			segment({
+				uri: `https://cdn.example.com/seg${index}.ts`,
+				sequenceNumber: index,
+				key: { keyUri: `https://cdn.example.com/key${index}.bin` },
+			}),
+		);
+
+		const rejected = planHlsDownload(
+			playlist({ encryption: { method: 'aes-128' }, segments: many }),
+		);
+
+		expect(rejected.ok).toBe(false);
+		if (rejected.ok) return;
+		expect(rejected.error.reason).toContain('鍵の種類');
+	});
+
+	it('同じ鍵を使い回すぶんには本数に関係なく通す', () => {
+		const many = Array.from({ length: 1_000 }, (_, index) =>
+			segment({
+				uri: `https://cdn.example.com/seg${index}.ts`,
+				sequenceNumber: index,
+				key: { keyUri: 'https://cdn.example.com/key.bin' },
+			}),
+		);
+
+		expect(
+			planHlsDownload(playlist({ encryption: { method: 'aes-128' }, segments: many })).ok,
+		).toBe(true);
+	});
+
 	it('拡張子から形式が分からないセグメントは通す', () => {
 		// 拡張子の無い URL は珍しくない。形式の判定は #EXT-X-MAP で行う
 		expect(planHlsDownload(playlist({ segmentFormat: 'unknown' })).ok).toBe(true);
@@ -199,6 +251,76 @@ describe('planHlsDownload', () => {
 				'https://cdn.example.com/b.m4s',
 			]);
 			expect(plan.value.container).toBe('mp4');
+		});
+
+		it('同じ内容の #EXT-X-MAP が再宣言されても重複させない', () => {
+			// パーサーは行ごとに新しいオブジェクトを作る。同一性で比べると、
+			// 不連続点ごとに同じ MAP を書く構成で init が二重に出力され、
+			// ファイル中央に 2 つ目の ftyp+moov が現れる
+			const plan = planHlsDownload(
+				playlist({
+					segments: [
+						segment({
+							uri: 'https://cdn.example.com/a.m4s',
+							initSegment: { uri: 'https://cdn.example.com/init.mp4' },
+						}),
+						segment({
+							uri: 'https://cdn.example.com/b.m4s',
+							initSegment: { uri: 'https://cdn.example.com/init.mp4' },
+						}),
+					],
+				}),
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.segments.map((item) => item.url)).toEqual([
+				'https://cdn.example.com/init.mp4',
+				'https://cdn.example.com/a.m4s',
+				'https://cdn.example.com/b.m4s',
+			]);
+		});
+
+		it('バイトレンジが違えば別の初期化セグメントとして扱う', () => {
+			const plan = planHlsDownload(
+				playlist({
+					segments: [
+						segment({
+							uri: 'https://cdn.example.com/a.m4s',
+							initSegment: {
+								uri: 'https://cdn.example.com/all.mp4',
+								byteRange: { length: 100, offset: 0 },
+							},
+						}),
+						segment({
+							uri: 'https://cdn.example.com/b.m4s',
+							initSegment: {
+								uri: 'https://cdn.example.com/all.mp4',
+								byteRange: { length: 100, offset: 200 },
+							},
+						}),
+					],
+				}),
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.segments).toHaveLength(4);
+		});
+
+		it('初期化セグメントの無い fMP4 は保存できない', () => {
+			// moov を含む 1 本が無いまま連結しても再生できない。
+			// 解析が fMP4 を一律で弾かなくなったぶん、ここで出し切る
+			const rejected = planHlsDownload(
+				playlist({
+					segmentFormat: 'fmp4',
+					segments: [segment({ uri: 'https://cdn.example.com/seg0.m4s' })],
+				}),
+			);
+
+			expect(rejected.ok).toBe(false);
+			if (rejected.ok) return;
+			expect(rejected.error.reason).toContain('初期化セグメント');
 		});
 
 		it('初期化セグメントの宛先も確かめる', () => {

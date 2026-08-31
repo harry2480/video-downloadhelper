@@ -23,6 +23,8 @@ const NO_SEGMENTS = 'セグメントが見つかりませんでした';
 const UNSAFE_SEGMENT = '取得できない URL のセグメントが含まれています';
 const UNSAFE_KEY = '取得できない URL の鍵が指定されています';
 const TOO_MANY_SEGMENTS = 'セグメントが多すぎます';
+const TOO_MANY_KEYS = '鍵の種類が多すぎます';
+const NO_INIT_SEGMENT = '初期化セグメントが見つからないため保存できません';
 
 /**
  * 扱うセグメント数の上限。
@@ -32,6 +34,15 @@ const TOO_MANY_SEGMENTS = 'セグメントが多すぎます';
  * 10 秒セグメントなら 20,000 本で 55 時間ぶん。VOD の実用範囲を十分に超える。
  */
 const MAX_SEGMENTS = 20_000;
+
+/**
+ * 取得する鍵の種類の上限。
+ *
+ * #EXT-X-KEY はセグメントごとに URI を変えられる。鍵は URL ごとに 1 回しか
+ * 取らないが、全部違えば重複排除が効かず、セグメント数と同じだけ
+ * リクエストが出る。正常なローテーションでも数十に収まる。
+ */
+const MAX_KEY_URLS = 256;
 
 /** 取得する 1 単位。初期化セグメントも同じ形で扱う。 */
 export type PlannedSegment = {
@@ -90,13 +101,14 @@ export function planHlsDownload(
 		// **初期化セグメントは、切り替わるたびに直前へ挟む。**
 		// #EXT-X-MAP は不連続点をまたいで変わりうる。1 本目だけを
 		// 先頭に置くと、後半のセグメントが誤った初期化データと組み合わされる
-		if (segment.initSegment !== undefined && segment.initSegment !== emittedInit) {
+		if (segment.initSegment !== undefined && !isSameInitSegment(segment.initSegment, emittedInit)) {
 			const planned = planSegment(
 				segment.initSegment.uri,
 				segment.initSegment.byteRange,
 				segment.initSegment.key,
-				// 初期化セグメントはシーケンス番号を持たない。IV 省略時は
-				// 続くセグメントと同じ番号を使う（RFC 8216 5.2）
+				// RFC 8216 は暗号化された #EXT-X-MAP に IV 属性を求めており、
+				// 番号からの導出は規定されていない。欠けている場合の
+				// フォールバックとして、続くセグメントと同じ番号を使う
 				segment.sequenceNumber,
 				options,
 			);
@@ -118,12 +130,40 @@ export function planHlsDownload(
 		segments.push(planned.value);
 	}
 
+	// **初期化セグメントの無い fMP4 は保存できない。** moov を含む 1 本が
+	// 無いまま連結しても再生できないファイルにしかならない。
+	// 従来は解析の時点で fMP4 を一律で弾いていたため表面化しなかった
+	if (playlist.segmentFormat === 'fmp4' && !sawInit) return err({ reason: NO_INIT_SEGMENT });
+
+	// **上限は展開後にも掛ける。** 初期化セグメントはセグメントごとに
+	// 切り替えられるため、展開前だけを見ると実際の取得回数が倍になる
+	if (segments.length > MAX_SEGMENTS) return err({ reason: TOO_MANY_SEGMENTS });
+
+	const keyUrls = new Set<string>();
+	for (const planned of segments) {
+		if (planned.decryption !== undefined) keyUrls.add(planned.decryption.keyUrl);
+	}
+	if (keyUrls.size > MAX_KEY_URLS) return err({ reason: TOO_MANY_KEYS });
+
 	return ok({
 		segments,
 		totalDuration: playlist.totalDuration,
 		// #EXT-X-MAP があれば fMP4。初期化セグメントと結合して mp4 になる
 		container: sawInit ? 'mp4' : 'ts',
 	});
+}
+
+/**
+ * 同じ初期化セグメントか。
+ *
+ * **値で比べる。** パーサーは #EXT-X-MAP 行ごとに新しいオブジェクトを作るため、
+ * 不連続点ごとに同じ URI の MAP を再宣言する構成（実在する）で、
+ * 同一性の比較だと初期化セグメントが二重に出力される。
+ */
+function isSameInitSegment(a: HlsInitSegment, b: HlsInitSegment | undefined): boolean {
+	if (b === undefined) return false;
+	if (a.uri !== b.uri) return false;
+	return a.byteRange?.offset === b.byteRange?.offset && a.byteRange?.length === b.byteRange?.length;
 }
 
 function planSegment(

@@ -19,7 +19,7 @@ import type { PlannedSegment } from './hls-download';
  */
 const DEFAULT_CONCURRENCY = 6;
 
-type SegmentDownloadError =
+export type SegmentDownloadError =
 	/** 取得に失敗した。何本目かを添える */
 	| { type: 'fetch-failed'; index: number; failure: SegmentFetchFailure }
 	/** 鍵を取得できなかった */
@@ -80,7 +80,9 @@ export async function downloadSegments(
 		const pending = keys.get(url);
 		if (pending !== undefined) return pending;
 
-		const request = fetcher.fetchBytes(url);
+		// AES-128 の鍵は 16 バイトと決まっている。読み切ってから長さを見ると、
+		// 巨大な応答を返す鍵 URL でメモリを食い潰される
+		const request = fetcher.fetchBytes(url, { maxBytes: AES_BLOCK_BYTES });
 		keys.set(url, request);
 		return request;
 	}

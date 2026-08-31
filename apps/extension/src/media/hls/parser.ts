@@ -371,6 +371,14 @@ export function parseMediaPlaylist(
 
 			sawAes = true;
 
+			// KEYFORMAT の既定は identity（URI が 16 バイトの鍵そのもの）。
+			// 別形式の鍵サーバーへ Cookie 付きで取りに行っても復号できない
+			const keyFormat = attributes.KEYFORMAT?.toLowerCase();
+			if (keyFormat !== undefined && keyFormat !== 'identity') {
+				currentKey = {};
+				continue;
+			}
+
 			if (method === 'AES-128' && attributes.URI !== undefined) {
 				const resolved = resolveUrl(attributes.URI, baseUrl);
 				if (!resolved.ok) return err({ type: 'invalid-uri', input: attributes.URI });
@@ -399,7 +407,17 @@ export function parseMediaPlaylist(
 			const resolved = resolveUrl(attributes.URI, baseUrl);
 			if (!resolved.ok) return err({ type: 'invalid-uri', input: attributes.URI });
 
-			const range = attributes.BYTERANGE ? parseByteRange(attributes.BYTERANGE, 0) : undefined;
+			let range: HlsByteRange | undefined;
+			if (attributes.BYTERANGE !== undefined) {
+				range = parseByteRange(attributes.BYTERANGE, 0);
+				// 範囲なしへ落とすと、初期化セグメントとしてファイル全体を取得する
+				if (range === undefined) {
+					return err({ type: 'invalid-byterange', input: attributes.BYTERANGE });
+				}
+				// オフセット省略形は「同一 URI の直前の終端」から続く。
+				// 初期化セグメントも同じファイルを共有しうる
+				previousEndByUri.set(resolved.value, range.offset + range.length);
+			}
 
 			currentInit = {
 				uri: resolved.value,
@@ -417,12 +435,16 @@ export function parseMediaPlaylist(
 		if (!resolved.ok) return err({ type: 'invalid-uri', input: line });
 
 		// オフセット省略形は「同一 URI の直前のセグメントの終端」から続く
-		const byteRange =
-			pendingByteRangeValue === undefined
-				? undefined
-				: parseByteRange(pendingByteRangeValue, previousEndByUri.get(resolved.value));
+		let byteRange: HlsByteRange | undefined;
+		if (pendingByteRangeValue !== undefined) {
+			byteRange = parseByteRange(pendingByteRangeValue, previousEndByUri.get(resolved.value));
 
-		if (byteRange) {
+			// **範囲なしへ落とさない。** 落とすと計画も取得も「範囲指定なし」
+			// としか見えず、エラーにならないままファイル全体を取得して連結する
+			if (byteRange === undefined) {
+				return err({ type: 'invalid-byterange', input: pendingByteRangeValue });
+			}
+
 			previousEndByUri.set(resolved.value, byteRange.offset + byteRange.length);
 		}
 
@@ -430,7 +452,9 @@ export function parseMediaPlaylist(
 			uri: resolved.value,
 			duration: pendingDuration ?? 0,
 			...(byteRange && { byteRange }),
-			sequenceNumber: mediaSequence + segments.length,
+			// 番号はループ後にまとめて割り当てる（#EXT-X-MEDIA-SEQUENCE が
+			// 先頭セグメントより後ろにあっても揃うようにするため）
+			sequenceNumber: 0,
 			...(currentKey && { key: currentKey }),
 			...(currentInit && { initSegment: currentInit }),
 		});
@@ -440,6 +464,11 @@ export function parseMediaPlaylist(
 	}
 
 	if (segments.length === 0) return err({ type: 'no-segments' });
+
+	// IV 省略時の導出に使う。ずれると復号は通るのに中身が壊れる
+	for (const [index, segment] of segments.entries()) {
+		segment.sequenceNumber = mediaSequence + index;
+	}
 
 	const totalDuration = segments.reduce((sum, segment) => sum + segment.duration, 0);
 
