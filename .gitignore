@@ -20,3 +20,6 @@ settings.local.json
 *.zip
 
 .vscode/settings.json
+
+# ffmpeg.wasm のコア（32MB）。pnpm build が node_modules から複製する
+apps/extension/public/ffmpeg/

@@ -44,13 +44,14 @@ function rejected(reason: string, duration: number | undefined) {
 }
 
 /**
- * 音声のみの AdaptationSet があるか。
+ * 音声だけの AdaptationSet を返す。
  *
  * DASH は映像と音声を別の Representation へ分けられる。分かれている場合、
- * 1 本のファイルにするには結合（Mux）が要る。
+ * 1 本のファイルにするには結合（Mux）が要る。**判定と取り出しを 1 つの
+ * 関数にまとめる**（片方だけ直す事故を避けるため）。
  */
-export function hasSeparateAudio(mpd: ParsedMpd): boolean {
-	return mpd.adaptationSets.some((set) => set.contentType === 'audio');
+export function findSeparateAudio(mpd: ParsedMpd): DashAdaptationSet | undefined {
+	return mpd.adaptationSets.find((set) => set.contentType === 'audio');
 }
 
 /** 保存対象にする AdaptationSet（映像。無ければ音声）。 */

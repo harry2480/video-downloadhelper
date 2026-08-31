@@ -5,7 +5,7 @@
 	"version": "0.1.0",
 	"scripts": {
 		"dev": "vite",
-		"build": "vite build",
+		"build": "node scripts/copy-ffmpeg.mjs && vite build",
 		"package": "node scripts/package.mjs",
 		"typecheck": "tsc --noEmit",
 		"test:unit": "vitest run",
@@ -15,11 +15,13 @@
 		"depcruise": "depcruise src --config .dependency-cruiser.cjs"
 	},
 	"dependencies": {
+		"@ffmpeg/ffmpeg": "^0.12.15",
 		"react": "^19.2.0",
 		"react-dom": "^19.2.0"
 	},
 	"devDependencies": {
 		"@crxjs/vite-plugin": "^2.7.1",
+		"@ffmpeg/core": "^0.12.10",
 		"@playwright/test": "^1.57.0",
 		"@tailwindcss/vite": "^4.3.3",
 		"@testing-library/jest-dom": "^7.0.0",

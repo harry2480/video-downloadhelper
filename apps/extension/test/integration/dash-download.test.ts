@@ -225,3 +225,61 @@ describe('DASH の保存', () => {
 		}
 	}, 90_000);
 });
+
+describe('映像と音声の結合', () => {
+	it('分かれた映像と音声を 1 本の mp4 にまとめる', async () => {
+		// **ffmpeg.wasm を実 Chrome で動かす経路。** 32MB の wasm を
+		// 同梱したうえで、拡張機能の CSP（wasm-unsafe-eval）で
+		// コンパイルできることの担保でもある
+		const contentPage = await harness.context.newPage();
+		const popup = await harness.context.newPage();
+
+		try {
+			await contentPage.goto(`${harness.server.origin}/media-dash-av.html`);
+			const tabId = await resolveTabId(harness, 'media-dash-av.html');
+
+			await popup.goto(popupUrl(harness.extensionId));
+			await contentPage.bringToFront();
+			await popup.reload();
+
+			await waitFor(
+				() => readStoredMedia(harness, tabId),
+				(media) => media?.[0]?.manifestResolved === true,
+				{ timeoutMs: 20_000, label: 'MPD の解析', diagnose: () => snapshot(harness) },
+			);
+
+			await expect
+				.poll(() => popup.getByRole('button', { name: '保存' }).count(), { timeout: 20_000 })
+				.toBe(1);
+
+			const before = new Set((await searchDownloads(harness)).map((item) => item.id));
+			await popup.getByRole('button', { name: '保存' }).click();
+
+			const completed = await waitFor(
+				async () =>
+					(await searchDownloads(harness)).find(
+						(item) => item.state === 'complete' && !before.has(item.id),
+					),
+				(item) => item !== undefined,
+				// 冷えた状態から wasm を読み込むため長めに待つ
+				{ timeoutMs: 120_000, label: '結合の完了', diagnose: () => snapshot(harness) },
+			);
+			if (completed === undefined) throw new Error('保存が完了しませんでした');
+
+			const saved = await readFile(completed.filename);
+
+			// **映像だけでも音声だけでもないこと。** 結合を飛ばすと
+			// どちらか一方がそのまま保存される
+			expect(saved).not.toEqual(await fixture('dash/av-video.mp4'));
+			expect(saved).not.toEqual(await fixture('dash/av-audio.m4a'));
+
+			// mp4 として妥当（ftyp ボックスで始まる）
+			expect(saved.subarray(4, 8).toString('ascii')).toBe('ftyp');
+			// 映像と音声の両方を含むぶん、どちらよりも大きい
+			expect(saved.byteLength).toBeGreaterThan((await fixture('dash/av-video.mp4')).byteLength);
+		} finally {
+			await popup.close();
+			await contentPage.close();
+		}
+	}, 180_000);
+});

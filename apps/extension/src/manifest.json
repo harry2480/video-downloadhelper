@@ -5,6 +5,9 @@
 	"description": "ページ内の動画・音声ストリームを検出して保存します",
 	"permissions": ["downloads", "storage", "webRequest", "offscreen"],
 	"host_permissions": ["<all_urls>"],
+	"content_security_policy": {
+		"extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+	},
 	"background": {
 		"service_worker": "src/background/service-worker.ts",
 		"type": "module"

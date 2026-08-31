@@ -93,20 +93,196 @@ describe('planDashDownload', () => {
 		expect(rejected.error.reason).toContain('ライブ');
 	});
 
-	it('映像と音声が分かれていれば対応しない', () => {
-		// 映像だけを保存すると「音の出ない動画」が黙って出来上がる
-		const rejected = planDashDownload(
-			mpd({
-				adaptationSets: [
-					videoSet(),
-					{ contentType: 'audio', representations: [representation({ id: 'a' })] },
-				],
-			}),
-		);
+	describe('映像と音声が分かれている場合', () => {
+		const audioRepresentation = representation({
+			id: 'a0',
+			bandwidth: 128_000,
+			initSegment: { uri: 'https://cdn.example.com/dash/a-init.mp4' },
+			segments: [{ uri: 'https://cdn.example.com/dash/a-1.m4s' }],
+		});
 
-		expect(rejected.ok).toBe(false);
-		if (rejected.ok) return;
-		expect(rejected.error.reason).toContain('結合');
+		const separated = mpd({
+			adaptationSets: [
+				videoSet(),
+				{ contentType: 'audio', representations: [audioRepresentation] },
+			],
+		});
+
+		it('結合できなければ対応しない', () => {
+			// 映像だけを保存すると「音の出ない動画」が黙って出来上がる
+			const rejected = planDashDownload(separated);
+
+			expect(rejected.ok).toBe(false);
+			if (rejected.ok) return;
+			expect(rejected.error.reason).toContain('結合');
+		});
+
+		it('結合できるなら音声側の並びも返す', () => {
+			const plan = planDashDownload(separated, { canMux: true });
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.audioSegments?.map((segment) => segment.url)).toEqual([
+				'https://cdn.example.com/dash/a-init.mp4',
+				'https://cdn.example.com/dash/a-1.m4s',
+			]);
+		});
+
+		it('音声は帯域が最も大きいものを採る', () => {
+			// 音声の品質はユーザーに選ばせていない。映像に見合うものを既定にする
+			const plan = planDashDownload(
+				mpd({
+					adaptationSets: [
+						videoSet(),
+						{
+							contentType: 'audio',
+							representations: [
+								representation({
+									id: 'low',
+									bandwidth: 64_000,
+									segments: [{ uri: 'https://cdn.example.com/dash/low.m4s' }],
+								}),
+								representation({
+									id: 'high',
+									bandwidth: 256_000,
+									segments: [{ uri: 'https://cdn.example.com/dash/high.m4s' }],
+								}),
+							],
+						},
+					],
+				}),
+				{ canMux: true },
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.audioSegments?.at(-1)?.url).toBe('https://cdn.example.com/dash/high.m4s');
+		});
+
+		it('帯域が分からない音声も比べられる', () => {
+			const plan = planDashDownload(
+				mpd({
+					adaptationSets: [
+						videoSet(),
+						{
+							contentType: 'audio',
+							representations: [
+								{ id: 'unknown', segments: [{ uri: 'https://cdn.example.com/dash/u.m4s' }] },
+								representation({
+									id: 'known',
+									bandwidth: 128_000,
+									segments: [{ uri: 'https://cdn.example.com/dash/k.m4s' }],
+								}),
+								{ id: 'unknown2', segments: [{ uri: 'https://cdn.example.com/dash/u2.m4s' }] },
+							],
+						},
+					],
+				}),
+				{ canMux: true },
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.audioSegments?.at(-1)?.url).toBe('https://cdn.example.com/dash/k.m4s');
+		});
+
+		it('全体長が分からなくても結合の計画を作る', () => {
+			const plan = planDashDownload(
+				{
+					isLive: false,
+					adaptationSets: [
+						videoSet(),
+						{ contentType: 'audio', representations: [audioRepresentation] },
+					],
+				},
+				{ canMux: true },
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.totalDuration).toBe(0);
+		});
+
+		it('音声側のセグメントが無ければ対応しない', () => {
+			const rejected = planDashDownload(
+				mpd({
+					adaptationSets: [
+						videoSet(),
+						{ contentType: 'audio', representations: [representation({ id: 'a', segments: [] })] },
+					],
+				}),
+				{ canMux: true },
+			);
+
+			expect(rejected.ok).toBe(false);
+			if (rejected.ok) return;
+			expect(rejected.error.reason).toContain('音声');
+		});
+
+		it('音声側の宛先も確かめる', () => {
+			const rejected = planDashDownload(
+				mpd({
+					adaptationSets: [
+						videoSet(),
+						{
+							contentType: 'audio',
+							representations: [
+								representation({ id: 'a', segments: [{ uri: 'file:///etc/passwd' }] }),
+							],
+						},
+					],
+				}),
+				{ canMux: true },
+			);
+
+			expect(rejected.ok).toBe(false);
+			if (rejected.ok) return;
+			expect(rejected.error.reason).toContain('取得できない URL');
+		});
+
+		it('音声側のセグメントが多すぎれば対応しない', () => {
+			const many = Array.from({ length: 20_001 }, (_, index) => ({
+				uri: `https://cdn.example.com/dash/a${index}.m4s`,
+			}));
+
+			const rejected = planDashDownload(
+				mpd({
+					adaptationSets: [
+						videoSet(),
+						{
+							contentType: 'audio',
+							representations: [representation({ id: 'a', segments: many })],
+						},
+					],
+				}),
+				{ canMux: true },
+			);
+
+			expect(rejected.ok).toBe(false);
+			if (rejected.ok) return;
+			expect(rejected.error.reason).toContain('多すぎます');
+		});
+
+		it('音声が 1 本で全体を成すなら上限を渡す', () => {
+			const plan = planDashDownload(
+				mpd({
+					adaptationSets: [
+						videoSet(),
+						{
+							contentType: 'audio',
+							representations: [
+								{ id: 'a', segments: [{ uri: 'https://cdn.example.com/dash/whole.m4a' }] },
+							],
+						},
+					],
+				}),
+				{ canMux: true, singleSegmentMaxBytes: 1_000 },
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.audioSegments?.[0]?.maxBytes).toBe(1_000);
+		});
 	});
 
 	it('字幕が別にあっても映像だけなら保存できる', () => {
