@@ -243,13 +243,37 @@ describe('parseOffscreenMessage', () => {
 				taskId: 't1',
 				objectUrl: 'blob:chrome-extension://x/abc',
 				bytes: 10,
+				container: 'mp4',
 			}),
 		).toEqual({
 			kind: 'assembly-done',
 			taskId: 't1',
 			objectUrl: 'blob:chrome-extension://x/abc',
 			bytes: 10,
+			container: 'mp4',
 		});
+	});
+
+	it('知らないコンテナは通さない', () => {
+		// 保存名の拡張子に使う。知らない値を通すとファイル名が壊れる
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-done',
+				taskId: 't1',
+				objectUrl: 'blob:chrome-extension://x/abc',
+				bytes: 10,
+				container: 'mkv',
+			}),
+		).toBeUndefined();
+
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-done',
+				taskId: 't1',
+				objectUrl: 'blob:chrome-extension://x/abc',
+				bytes: 10,
+			}),
+		).toBeUndefined();
 	});
 
 	it('失敗の理由を通す', () => {

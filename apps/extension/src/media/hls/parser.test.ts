@@ -333,6 +333,7 @@ seg2.ts
 		expect(parsed.segments[0]).toEqual({
 			uri: 'https://cdn.example.com/hls/1080p/seg0.ts',
 			duration: 9.009,
+			sequenceNumber: 0,
 		});
 	});
 
@@ -461,6 +462,39 @@ a.ts
 		});
 	});
 
+	describe('メディアシーケンス', () => {
+		it('#EXT-X-MEDIA-SEQUENCE を起点に番号を振る', () => {
+			// IV 省略時の導出に使う。ずれると復号結果が壊れる
+			const content = `#EXTM3U
+#EXT-X-MEDIA-SEQUENCE:10
+#EXTINF:6.0,
+a.ts
+#EXTINF:6.0,
+b.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.mediaSequence).toBe(10);
+			expect(parsed.segments.map((segment) => segment.sequenceNumber)).toEqual([10, 11]);
+		});
+
+		it('値が壊れていれば 0 として扱う', () => {
+			// 導出した IV がずれるより、既定の 0 から数え直す方が読みやすい
+			const content = '#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:abc\n#EXTINF:6.0,\na.ts\n#EXT-X-ENDLIST';
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.mediaSequence).toBe(0);
+			expect(parsed.segments[0]?.sequenceNumber).toBe(0);
+		});
+
+		it('省略時は 0 から始める', () => {
+			const parsed = unwrap(parseMediaPlaylist(VOD_TS, MEDIA_BASE));
+
+			expect(parsed.mediaSequence).toBe(0);
+			expect(parsed.segments.map((segment) => segment.sequenceNumber)).toEqual([0, 1, 2]);
+		});
+	});
+
 	describe('暗号化', () => {
 		it('#EXT-X-KEY がなければ none', () => {
 			expect(unwrap(parseMediaPlaylist(VOD_TS, MEDIA_BASE)).encryption).toEqual({
@@ -468,17 +502,95 @@ a.ts
 			});
 		});
 
-		it('AES-128 の鍵 URI を解決する', () => {
+		it('AES-128 の鍵 URI を解決し、セグメントへ結び付ける', () => {
 			const content = `#EXTM3U
 #EXT-X-KEY:METHOD=AES-128,URI="../keys/key.bin",IV=0x00000000000000000000000000000001
 #EXTINF:6.0,
 seg.ts
 #EXT-X-ENDLIST`;
-			expect(unwrap(parseMediaPlaylist(content, MEDIA_BASE)).encryption).toEqual({
-				method: 'aes-128',
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.encryption).toEqual({ method: 'aes-128' });
+			expect(parsed.segments[0]?.key).toEqual({
 				keyUri: 'https://cdn.example.com/hls/keys/key.bin',
 				iv: '0x00000000000000000000000000000001',
 			});
+		});
+
+		it('#EXT-X-KEY はそれ以降のセグメントにだけ効く', () => {
+			// プレイリストの途中から暗号化される構成がある。全体へ遡って
+			// 適用すると、平文のセグメントを復号しようとして失敗する
+			const content = `#EXTM3U
+#EXTINF:6.0,
+plain.ts
+#EXT-X-KEY:METHOD=AES-128,URI="k1.bin"
+#EXTINF:6.0,
+enc.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.key).toBeUndefined();
+			expect(parsed.segments[1]?.key?.keyUri).toBe('https://cdn.example.com/hls/1080p/k1.bin');
+			// 1 つでも暗号化されていれば、要約は暗号化として扱う
+			expect(parsed.encryption).toEqual({ method: 'aes-128' });
+		});
+
+		it('鍵の切り替えをセグメントごとに追う', () => {
+			// 1 つだけ覚えると、鍵が回るストリームで一部が復号できない
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="k1.bin"
+#EXTINF:6.0,
+a.ts
+#EXT-X-KEY:METHOD=AES-128,URI="k2.bin"
+#EXTINF:6.0,
+b.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments.map((segment) => segment.key?.keyUri)).toEqual([
+				'https://cdn.example.com/hls/1080p/k1.bin',
+				'https://cdn.example.com/hls/1080p/k2.bin',
+			]);
+		});
+
+		it('METHOD=NONE で以降の暗号化が解ける', () => {
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="k1.bin"
+#EXTINF:6.0,
+enc.ts
+#EXT-X-KEY:METHOD=NONE
+#EXTINF:6.0,
+plain.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.key).toBeDefined();
+			expect(parsed.segments[1]?.key).toBeUndefined();
+			// 途中まで暗号化されていた事実は要約に残す
+			expect(parsed.encryption).toEqual({ method: 'aes-128' });
+		});
+
+		it('#EXT-X-MAP にもその時点の鍵を適用する', () => {
+			// RFC 8216 は初期化セグメントにも直前の #EXT-X-KEY を適用する。
+			// 平文として扱うと、結合したファイルの先頭だけが壊れる
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="k1.bin"
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:6.0,
+seg.m4s
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.initSegment?.key?.keyUri).toBe('https://cdn.example.com/hls/1080p/k1.bin');
+		});
+
+		it('URI を欠く #EXT-X-KEY でも平文として扱わない', () => {
+			// 復号できないことに変わりはない。鍵なしで通すと暗号文を保存する
+			const content = '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128\n#EXTINF:6.0,\nseg.ts\n#EXT-X-ENDLIST';
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.key).toEqual({});
+			expect(parsed.encryption).toEqual({ method: 'aes-128' });
 		});
 
 		it('METHOD=NONE を none として扱う', () => {

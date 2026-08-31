@@ -8,6 +8,7 @@ import type {
 	HlsPlaylistKind,
 	HlsSegment,
 	HlsSegmentFormat,
+	HlsSegmentKey,
 	HlsVariantStream,
 	ParsedMasterPlaylist,
 	ParsedMediaPlaylist,
@@ -296,8 +297,18 @@ export function parseMediaPlaylist(
 	let targetDuration: number | undefined;
 	let hasEndList = false;
 	let isVodPlaylistType = false;
-	let encryption: HlsEncryption = { method: 'none' };
+	let mediaSequence = 0;
 	let initSegment: ParsedMediaPlaylist['initSegment'];
+
+	/**
+	 * 直近の #EXT-X-KEY。以降のセグメントへ適用される。
+	 * METHOD=NONE で解除されるため、undefined へ戻ることもある。
+	 */
+	let currentKey: HlsSegmentKey | undefined;
+	/** DRM を 1 度でも見たか。要約の判定に使う */
+	let drmReason: string | undefined;
+	/** AES-128 を 1 度でも見たか。要約の判定に使う */
+	let sawAes = false;
 
 	let pendingDuration: number | undefined;
 	/**
@@ -338,23 +349,26 @@ export function parseMediaPlaylist(
 
 		if (line.startsWith('#EXT-X-KEY:')) {
 			const attributes = parseAttributeList(line.slice('#EXT-X-KEY:'.length));
-			const drmReason = detectDrmFromAttributes(attributes);
-			if (drmReason) {
-				encryption = { method: 'drm', reason: drmReason };
+			const drm = detectDrmFromAttributes(attributes);
+			if (drm) {
+				drmReason ??= drm;
+				// 復号しない方式。以降のセグメントは平文ではないので鍵を立てておく
+				currentKey = {};
 				continue;
 			}
 
 			const method = attributes.METHOD?.toUpperCase();
 			if (method === undefined || method === 'NONE') {
-				encryption = { method: 'none' };
+				currentKey = undefined;
 				continue;
 			}
+
+			sawAes = true;
 
 			if (method === 'AES-128' && attributes.URI !== undefined) {
 				const resolved = resolveUrl(attributes.URI, baseUrl);
 				if (!resolved.ok) return err({ type: 'invalid-uri', input: attributes.URI });
-				encryption = {
-					method: 'aes-128',
+				currentKey = {
 					keyUri: resolved.value,
 					...(attributes.IV !== undefined && { iv: attributes.IV }),
 				};
@@ -362,8 +376,13 @@ export function parseMediaPlaylist(
 			}
 
 			// URI が欠けている、または未知の METHOD。復号できない以上は
-			// 暗号化として扱う。none のまま通すと暗号文をそのまま保存してしまう
-			encryption = { method: 'aes-128' };
+			// 暗号化として扱う。鍵なしで通すと暗号文をそのまま保存してしまう
+			currentKey = {};
+			continue;
+		}
+
+		if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+			mediaSequence = parseNumber(line.slice('#EXT-X-MEDIA-SEQUENCE:'.length)) ?? 0;
 			continue;
 		}
 
@@ -379,6 +398,8 @@ export function parseMediaPlaylist(
 			initSegment = {
 				uri: resolved.value,
 				...(range && { byteRange: range }),
+				// RFC 8216 は初期化セグメントにも直前の #EXT-X-KEY を適用する
+				...(currentKey && { key: currentKey }),
 			};
 			continue;
 		}
@@ -403,6 +424,8 @@ export function parseMediaPlaylist(
 			uri: resolved.value,
 			duration: pendingDuration ?? 0,
 			...(byteRange && { byteRange }),
+			sequenceNumber: mediaSequence + segments.length,
+			...(currentKey && { key: currentKey }),
 		});
 
 		pendingDuration = undefined;
@@ -413,6 +436,15 @@ export function parseMediaPlaylist(
 
 	const totalDuration = segments.reduce((sum, segment) => sum + segment.duration, 0);
 
+	// **1 つでも該当すればその方式として扱う。** 途中から暗号化される
+	// プレイリストを平文扱いすると、暗号文をそのまま保存してしまう
+	const encryption: HlsEncryption =
+		drmReason !== undefined
+			? { method: 'drm', reason: drmReason }
+			: sawAes
+				? { method: 'aes-128' }
+				: { method: 'none' };
+
 	return ok({
 		kind: 'media',
 		segments,
@@ -420,6 +452,7 @@ export function parseMediaPlaylist(
 		totalDuration,
 		isLive: !hasEndList && !isVodPlaylistType,
 		segmentFormat: detectSegmentFormat(segments[0]?.uri, initSegment !== undefined),
+		mediaSequence,
 		...(initSegment && { initSegment }),
 		encryption,
 	});

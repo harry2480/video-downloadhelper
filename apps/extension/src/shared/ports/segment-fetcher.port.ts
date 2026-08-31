@@ -14,7 +14,25 @@ export type SegmentFetchFailure =
 	/** 2xx 以外が返った */
 	| { reason: 'http-error'; status: number }
 	/** 1 セグメントとしては大きすぎる */
-	| { reason: 'too-large' };
+	| { reason: 'too-large' }
+	/** 要求した範囲が返らなかった。#EXT-X-BYTERANGE で使う */
+	| { reason: 'range-not-satisfied' };
+
+/** 取得するバイト範囲（両端を含む）。 */
+export type FetchByteRange = {
+	offset: number;
+	length: number;
+};
+
+export type SegmentFetchOptions = {
+	/**
+	 * 部分取得。指定した場合、**返るのはその範囲ちょうどでなければならない**。
+	 *
+	 * Range を無視して全体を返すサーバーがある。気づかずに連結すると、
+	 * 同じ内容を繰り返した壊れたファイルになるため、実装側で検証する。
+	 */
+	range?: FetchByteRange;
+};
 
 export type SegmentFetcherPort = {
 	/**
@@ -23,5 +41,8 @@ export type SegmentFetcherPort = {
 	 * `ArrayBuffer` を裏に持つ形に固定する。`SharedArrayBuffer` 由来のものは
 	 * `Blob` へ渡せず、結合の段で詰まるため。
 	 */
-	fetchBytes: (url: string) => Promise<Result<Uint8Array<ArrayBuffer>, SegmentFetchFailure>>;
+	fetchBytes: (
+		url: string,
+		options?: SegmentFetchOptions,
+	) => Promise<Result<Uint8Array<ArrayBuffer>, SegmentFetchFailure>>;
 };

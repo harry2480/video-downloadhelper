@@ -264,13 +264,13 @@ describe('マニフェスト解析の状態', () => {
 				media({
 					type: 'hls',
 					manifestResolved: true,
-					unsupportedReason: 'fMP4 セグメントの HLS には未対応です',
+					unsupportedReason: 'ライブ配信の保存には未対応です',
 				}),
 			],
 			blocked: false,
 		});
 
-		expect(await screen.findByText(/fMP4 セグメント/)).toBeInTheDocument();
+		expect(await screen.findByText(/ライブ配信/)).toBeInTheDocument();
 	});
 });
 

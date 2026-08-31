@@ -59,6 +59,14 @@
 		}
 	},
 	"files": {
-		"ignore": ["node_modules", "dist", "coverage", "playwright-report", "test-results", ".claude"]
+		"ignore": [
+			"node_modules",
+			"dist",
+			"coverage",
+			"playwright-report",
+			"test-results",
+			".claude",
+			"**/test/fixtures"
+		]
 	}
 }

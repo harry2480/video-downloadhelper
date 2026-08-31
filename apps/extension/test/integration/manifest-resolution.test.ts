@@ -72,21 +72,45 @@ describe('Master Playlist の解析', () => {
 	});
 });
 
-describe('対応外の判定', () => {
-	it('fMP4 セグメントの HLS を対応外として理由を記録する', async () => {
+describe('対応の判定', () => {
+	it('fMP4 セグメントの HLS を対応外にしない', async () => {
+		// 初期化セグメント（#EXT-X-MAP）を先頭に置いて結合すれば
+		// mp4 として保存できる。理由を出して止めない
 		const page = await harness.context.newPage();
-		await page.goto(`${harness.server.origin}/media-hls-fmp4.html`);
 
-		const tabId = await resolveTabId(harness, 'media-hls-fmp4.html');
-		const stored = await waitFor(
-			() => readStoredMedia(harness, tabId),
-			(media) => media?.[0]?.manifestResolved === true,
-			{ label: 'fMP4 の解析', diagnose: () => snapshot(harness) },
-		);
+		try {
+			await page.goto(`${harness.server.origin}/media-hls-fmp4.html`);
 
-		expect(stored?.[0]?.unsupportedReason).toContain('fMP4');
-		expect(stored?.[0]?.variants).toBeUndefined();
+			const tabId = await resolveTabId(harness, 'media-hls-fmp4.html');
+			const stored = await waitFor(
+				() => readStoredMedia(harness, tabId),
+				(media) => media?.[0]?.manifestResolved === true,
+				{ label: 'fMP4 の解析', diagnose: () => snapshot(harness) },
+			);
 
-		await page.close();
+			expect(stored?.[0]?.unsupportedReason).toBeUndefined();
+		} finally {
+			await page.close();
+		}
+	});
+
+	it('AES-128 の HLS を対応外にしない', async () => {
+		// 鍵を取得して復号する。復号できない場合だけ保存計画の側で弾く
+		const page = await harness.context.newPage();
+
+		try {
+			await page.goto(`${harness.server.origin}/media-hls-aes.html`);
+
+			const tabId = await resolveTabId(harness, 'media-hls-aes.html');
+			const stored = await waitFor(
+				() => readStoredMedia(harness, tabId),
+				(media) => media?.[0]?.manifestResolved === true,
+				{ label: 'AES-128 の解析', diagnose: () => snapshot(harness) },
+			);
+
+			expect(stored?.[0]?.unsupportedReason).toBeUndefined();
+		} finally {
+			await page.close();
+		}
 	});
 });

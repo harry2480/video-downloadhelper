@@ -79,7 +79,14 @@ export type OffscreenToBackground =
 			total: number;
 			bytes: number;
 	  }
-	| { kind: 'assembly-done'; taskId: string; objectUrl: string; bytes: number }
+	| {
+			kind: 'assembly-done';
+			taskId: string;
+			objectUrl: string;
+			bytes: number;
+			/** 出来上がったファイルのコンテナ。保存名の拡張子を合わせるために使う */
+			container: 'ts' | 'mp4';
+	  }
 	/** 理由はユーザーへ出せる文言にしてから送る */
 	| { kind: 'assembly-failed'; taskId: string; reason: string };
 
@@ -238,7 +245,10 @@ export function parseOffscreenMessage(raw: unknown): OffscreenToBackground | und
 		// 信頼境界で形を確かめておく
 		if (!objectUrl.startsWith('blob:')) return undefined;
 
-		return { kind: 'assembly-done', taskId, objectUrl, bytes };
+		// 拡張子の決定に使う。知らない値を通すと保存名が壊れる
+		if (raw.container !== 'ts' && raw.container !== 'mp4') return undefined;
+
+		return { kind: 'assembly-done', taskId, objectUrl, bytes, container: raw.container };
 	}
 
 	if (raw.kind === 'assembly-failed') {
