@@ -1,5 +1,10 @@
 import { type SegmentDecryption, resolveSegmentDecryption } from '../media/hls/decryption';
-import type { HlsByteRange, HlsSegmentKey, ParsedMediaPlaylist } from '../media/hls/types';
+import type {
+	HlsByteRange,
+	HlsInitSegment,
+	HlsSegmentKey,
+	ParsedMediaPlaylist,
+} from '../media/hls/types';
 import { type Result, err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
 
 /**
@@ -78,24 +83,30 @@ export function planHlsDownload(
 	if (playlist.segments.length > MAX_SEGMENTS) return err({ reason: TOO_MANY_SEGMENTS });
 
 	const segments: PlannedSegment[] = [];
-
-	// **初期化セグメントは先頭に置く。** fMP4 は moov を含むこの 1 本が無いと
-	// 再生できず、順序が入れ替わってもいけない
-	if (playlist.initSegment !== undefined) {
-		const planned = planSegment(
-			playlist.initSegment.uri,
-			playlist.initSegment.byteRange,
-			playlist.initSegment.key,
-			// 初期化セグメントはシーケンス番号を持たない。IV 省略時は
-			// 先頭セグメントと同じ番号を使う（RFC 8216 5.2）
-			playlist.mediaSequence,
-			options,
-		);
-		if (!planned.ok) return planned;
-		segments.push(planned.value);
-	}
+	let emittedInit: HlsInitSegment | undefined;
+	let sawInit = false;
 
 	for (const segment of playlist.segments) {
+		// **初期化セグメントは、切り替わるたびに直前へ挟む。**
+		// #EXT-X-MAP は不連続点をまたいで変わりうる。1 本目だけを
+		// 先頭に置くと、後半のセグメントが誤った初期化データと組み合わされる
+		if (segment.initSegment !== undefined && segment.initSegment !== emittedInit) {
+			const planned = planSegment(
+				segment.initSegment.uri,
+				segment.initSegment.byteRange,
+				segment.initSegment.key,
+				// 初期化セグメントはシーケンス番号を持たない。IV 省略時は
+				// 続くセグメントと同じ番号を使う（RFC 8216 5.2）
+				segment.sequenceNumber,
+				options,
+			);
+			if (!planned.ok) return planned;
+
+			segments.push(planned.value);
+			emittedInit = segment.initSegment;
+			sawInit = true;
+		}
+
 		const planned = planSegment(
 			segment.uri,
 			segment.byteRange,
@@ -111,7 +122,7 @@ export function planHlsDownload(
 		segments,
 		totalDuration: playlist.totalDuration,
 		// #EXT-X-MAP があれば fMP4。初期化セグメントと結合して mp4 になる
-		container: playlist.initSegment === undefined ? 'ts' : 'mp4',
+		container: sawInit ? 'mp4' : 'ts',
 	});
 }
 

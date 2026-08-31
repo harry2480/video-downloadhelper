@@ -14,17 +14,22 @@ export const AES_BLOCK_BYTES = 16;
 /**
  * `0x` 付き 16 進表記の IV をバイト列へ直す。
  *
- * 32 桁ちょうどでない、16 進以外を含む、といった値は復号に使えない。
+ * **32 桁未満は左を 0 で埋める。** RFC 8216 の IV は 128 bit の数値であり、
+ * `IV=0x1` のような短い表記も妥当。桁数ちょうどを要求すると、正しい
+ * プレイリストを「鍵の情報が無い」として弾いてしまう。
+ *
+ * 16 進以外を含む、32 桁を超える、空、といった値は復号に使えない。
  * 黙って 0 埋めすると、復号できたように見えて中身が壊れる。
  */
 export function parseHexIv(value: string): Uint8Array<ArrayBuffer> | undefined {
 	const hex = value.trim().replace(/^0x/i, '');
-	if (hex.length !== AES_BLOCK_BYTES * 2) return undefined;
+	if (hex.length === 0 || hex.length > AES_BLOCK_BYTES * 2) return undefined;
 	if (!/^[0-9a-f]+$/i.test(hex)) return undefined;
 
+	const padded = hex.padStart(AES_BLOCK_BYTES * 2, '0');
 	const bytes = new Uint8Array(new ArrayBuffer(AES_BLOCK_BYTES));
 	for (let index = 0; index < AES_BLOCK_BYTES; index += 1) {
-		bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+		bytes[index] = Number.parseInt(padded.slice(index * 2, index * 2 + 2), 16);
 	}
 	return bytes;
 }

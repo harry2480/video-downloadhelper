@@ -65,6 +65,18 @@ export type HlsSegmentKey = {
 	iv?: string;
 };
 
+/**
+ * #EXT-X-MAP の初期化セグメント（fMP4）。
+ *
+ * RFC 8216 は初期化セグメントにも直前の #EXT-X-KEY を適用すると定めている。
+ * 平文として扱うと、結合したファイルの先頭だけが壊れる。
+ */
+export type HlsInitSegment = {
+	uri: string;
+	byteRange?: HlsByteRange;
+	key?: HlsSegmentKey;
+};
+
 export type HlsSegment = {
 	/** 解決済みの絶対 URL */
 	uri: string;
@@ -75,6 +87,15 @@ export type HlsSegment = {
 	sequenceNumber: number;
 	/** 暗号化されている場合の鍵。無ければ平文 */
 	key?: HlsSegmentKey;
+	/**
+	 * このセグメントに適用される初期化セグメント。
+	 *
+	 * **セグメントごとに持つ。** #EXT-X-MAP は不連続点をまたいで
+	 * 切り替わりうる。1 つだけ覚えると、前半のセグメントが誤った
+	 * 初期化データと組み合わされ、壊れた mp4 になる。
+	 * 切り替わらない限り同一のオブジェクトを共有する。
+	 */
+	initSegment?: HlsInitSegment;
 };
 
 /**
@@ -102,18 +123,6 @@ export type ParsedMediaPlaylist = {
 	segmentFormat: HlsSegmentFormat;
 	/** #EXT-X-MEDIA-SEQUENCE。省略時は 0（RFC 8216 4.3.3.2） */
 	mediaSequence: number;
-	/** #EXT-X-MAP の初期化セグメント（fMP4 のみ） */
-	initSegment?: {
-		uri: string;
-		byteRange?: HlsByteRange;
-		/**
-		 * #EXT-X-MAP の時点で有効だった鍵。
-		 *
-		 * RFC 8216 は初期化セグメントにも直前の #EXT-X-KEY を適用すると
-		 * 定めている。平文として扱うと、結合したファイルの先頭だけが壊れる。
-		 */
-		key?: HlsSegmentKey;
-	};
 	encryption: HlsEncryption;
 };
 

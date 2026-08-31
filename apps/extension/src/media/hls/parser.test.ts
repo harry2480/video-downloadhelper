@@ -380,9 +380,44 @@ seg0.m4s
 			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
 
 			expect(parsed.segmentFormat).toBe('fmp4');
-			expect(parsed.initSegment).toEqual({
+			expect(parsed.segments[0]?.initSegment).toEqual({
 				uri: 'https://cdn.example.com/hls/1080p/init.mp4',
 			});
+		});
+
+		it('#EXT-X-MAP の切り替わりをセグメントごとに追う', () => {
+			// 不連続点をまたいで初期化セグメントが変わる構成がある
+			const content = `#EXTM3U
+#EXT-X-MAP:URI="init-a.mp4"
+#EXTINF:6.0,
+a.m4s
+#EXT-X-DISCONTINUITY
+#EXT-X-MAP:URI="init-b.mp4"
+#EXTINF:6.0,
+b.m4s
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments.map((segment) => segment.initSegment?.uri)).toEqual([
+				'https://cdn.example.com/hls/1080p/init-a.mp4',
+				'https://cdn.example.com/hls/1080p/init-b.mp4',
+			]);
+		});
+
+		it('#EXT-X-MAP より前のセグメントには適用しない', () => {
+			const content = `#EXTM3U
+#EXTINF:6.0,
+plain.ts
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:6.0,
+seg.m4s
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.initSegment).toBeUndefined();
+			expect(parsed.segments[1]?.initSegment?.uri).toBe(
+				'https://cdn.example.com/hls/1080p/init.mp4',
+			);
 		});
 
 		it('#EXT-X-MAP の BYTERANGE を解析する', () => {
@@ -394,7 +429,7 @@ stream.mp4
 #EXT-X-ENDLIST`;
 			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
 
-			expect(parsed.initSegment?.byteRange).toEqual({ length: 720, offset: 0 });
+			expect(parsed.segments[0]?.initSegment?.byteRange).toEqual({ length: 720, offset: 0 });
 		});
 
 		it('MAP なしでも .m4s 拡張子なら fmp4 と判定する', () => {
@@ -581,7 +616,9 @@ seg.m4s
 #EXT-X-ENDLIST`;
 			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
 
-			expect(parsed.initSegment?.key?.keyUri).toBe('https://cdn.example.com/hls/1080p/k1.bin');
+			expect(parsed.segments[0]?.initSegment?.key?.keyUri).toBe(
+				'https://cdn.example.com/hls/1080p/k1.bin',
+			);
 		});
 
 		it('URI を欠く #EXT-X-KEY でも平文として扱わない', () => {
@@ -693,7 +730,7 @@ seg.ts
 #EXT-X-ENDLIST`;
 			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
 
-			expect(parsed.initSegment).toBeUndefined();
+			expect(parsed.segments[0]?.initSegment).toBeUndefined();
 			expect(parsed.segmentFormat).toBe('ts');
 		});
 

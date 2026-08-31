@@ -127,8 +127,12 @@ describe('planHlsDownload', () => {
 			const plan = planHlsDownload(
 				playlist({
 					segmentFormat: 'fmp4',
-					initSegment: { uri: 'https://cdn.example.com/init.mp4' },
-					segments: [segment({ uri: 'https://cdn.example.com/seg0.m4s' })],
+					segments: [
+						segment({
+							uri: 'https://cdn.example.com/seg0.m4s',
+							initSegment: { uri: 'https://cdn.example.com/init.mp4' },
+						}),
+					],
 				}),
 			);
 
@@ -145,8 +149,62 @@ describe('planHlsDownload', () => {
 			});
 		});
 
+		it('初期化セグメントが切り替わるたびに挟み直す', () => {
+			// #EXT-X-MAP は不連続点をまたいで変わる。1 本目だけを先頭に置くと、
+			// 後半のセグメントが誤った初期化データと組み合わされて壊れる
+			const first = { uri: 'https://cdn.example.com/init-a.mp4' };
+			const second = { uri: 'https://cdn.example.com/init-b.mp4' };
+
+			const plan = planHlsDownload(
+				playlist({
+					segments: [
+						segment({ uri: 'https://cdn.example.com/a0.m4s', initSegment: first }),
+						segment({ uri: 'https://cdn.example.com/a1.m4s', initSegment: first }),
+						segment({ uri: 'https://cdn.example.com/b0.m4s', initSegment: second }),
+					],
+				}),
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			// 同じ初期化セグメントが続く間は挟まない
+			expect(plan.value.segments.map((item) => item.url)).toEqual([
+				'https://cdn.example.com/init-a.mp4',
+				'https://cdn.example.com/a0.m4s',
+				'https://cdn.example.com/a1.m4s',
+				'https://cdn.example.com/init-b.mp4',
+				'https://cdn.example.com/b0.m4s',
+			]);
+			expect(plan.value.container).toBe('mp4');
+		});
+
+		it('初期化セグメントが途中から現れても対応する', () => {
+			const plan = planHlsDownload(
+				playlist({
+					segments: [
+						segment({ uri: 'https://cdn.example.com/a.ts' }),
+						segment({
+							uri: 'https://cdn.example.com/b.m4s',
+							initSegment: { uri: 'https://cdn.example.com/init.mp4' },
+						}),
+					],
+				}),
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.segments.map((item) => item.url)).toEqual([
+				'https://cdn.example.com/a.ts',
+				'https://cdn.example.com/init.mp4',
+				'https://cdn.example.com/b.m4s',
+			]);
+			expect(plan.value.container).toBe('mp4');
+		});
+
 		it('初期化セグメントの宛先も確かめる', () => {
-			const rejected = planHlsDownload(playlist({ initSegment: { uri: 'file:///etc/passwd' } }));
+			const rejected = planHlsDownload(
+				playlist({ segments: [segment({ initSegment: { uri: 'file:///etc/passwd' } })] }),
+			);
 
 			expect(rejected.ok).toBe(false);
 			if (rejected.ok) return;
@@ -156,10 +214,14 @@ describe('planHlsDownload', () => {
 		it('初期化セグメントのバイトレンジも引き継ぐ', () => {
 			const plan = planHlsDownload(
 				playlist({
-					initSegment: {
-						uri: 'https://cdn.example.com/all.mp4',
-						byteRange: { length: 800, offset: 0 },
-					},
+					segments: [
+						segment({
+							initSegment: {
+								uri: 'https://cdn.example.com/all.mp4',
+								byteRange: { length: 800, offset: 0 },
+							},
+						}),
+					],
 				}),
 			);
 
@@ -320,8 +382,13 @@ describe('planHlsDownload', () => {
 				playlist({
 					encryption: { method: 'aes-128' },
 					mediaSequence: 3,
-					initSegment: { uri: 'https://cdn.example.com/init.mp4', key: { keyUri: KEY_URL } },
-					segments: [segment({ key: { keyUri: KEY_URL }, sequenceNumber: 3 })],
+					segments: [
+						segment({
+							key: { keyUri: KEY_URL },
+							sequenceNumber: 3,
+							initSegment: { uri: 'https://cdn.example.com/init.mp4', key: { keyUri: KEY_URL } },
+						}),
+					],
 				}),
 			);
 

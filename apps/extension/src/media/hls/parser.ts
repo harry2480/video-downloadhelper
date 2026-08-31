@@ -4,6 +4,7 @@ import type {
 	HlsAudioRendition,
 	HlsByteRange,
 	HlsEncryption,
+	HlsInitSegment,
 	HlsParseError,
 	HlsPlaylistKind,
 	HlsSegment,
@@ -298,7 +299,12 @@ export function parseMediaPlaylist(
 	let hasEndList = false;
 	let isVodPlaylistType = false;
 	let mediaSequence = 0;
-	let initSegment: ParsedMediaPlaylist['initSegment'];
+
+	/**
+	 * 直近の #EXT-X-MAP。以降のセグメントへ適用される。
+	 * 切り替わらない限り同じオブジェクトを共有する（計画側が同一性で判定する）。
+	 */
+	let currentInit: HlsInitSegment | undefined;
 
 	/**
 	 * 直近の #EXT-X-KEY。以降のセグメントへ適用される。
@@ -395,7 +401,7 @@ export function parseMediaPlaylist(
 
 			const range = attributes.BYTERANGE ? parseByteRange(attributes.BYTERANGE, 0) : undefined;
 
-			initSegment = {
+			currentInit = {
 				uri: resolved.value,
 				...(range && { byteRange: range }),
 				// RFC 8216 は初期化セグメントにも直前の #EXT-X-KEY を適用する
@@ -426,6 +432,7 @@ export function parseMediaPlaylist(
 			...(byteRange && { byteRange }),
 			sequenceNumber: mediaSequence + segments.length,
 			...(currentKey && { key: currentKey }),
+			...(currentInit && { initSegment: currentInit }),
 		});
 
 		pendingDuration = undefined;
@@ -451,9 +458,11 @@ export function parseMediaPlaylist(
 		...(targetDuration !== undefined && { targetDuration }),
 		totalDuration,
 		isLive: !hasEndList && !isVodPlaylistType,
-		segmentFormat: detectSegmentFormat(segments[0]?.uri, initSegment !== undefined),
+		segmentFormat: detectSegmentFormat(
+			segments[0]?.uri,
+			segments.some((segment) => segment.initSegment !== undefined),
+		),
 		mediaSequence,
-		...(initSegment && { initSegment }),
 		encryption,
 	});
 }

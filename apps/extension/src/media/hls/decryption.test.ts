@@ -32,9 +32,15 @@ describe('parseHexIv', () => {
 		);
 	});
 
-	it('桁数が足りなければ受け取らない', () => {
-		// 0 埋めして通すと、復号できたように見えて中身が壊れる
-		expect(parseHexIv('0x00')).toBeUndefined();
+	it('32 桁未満は左を 0 で埋める', () => {
+		// RFC 8216 の IV は 128 bit の数値。`IV=0x1` のような短い表記も妥当で、
+		// 桁数ちょうどを要求すると正しいプレイリストを弾いてしまう
+		expect(hex(parseHexIv('0x1') as Uint8Array)).toBe('00000000000000000000000000000001');
+		expect(hex(parseHexIv('0xff') as Uint8Array)).toBe('000000000000000000000000000000ff');
+	});
+
+	it('32 桁を超えれば受け取らない', () => {
+		// 上位を捨てて通すと、復号できたように見えて中身が壊れる
 		expect(parseHexIv('0x000102030405060708090a0b0c0d0e0f00')).toBeUndefined();
 	});
 
