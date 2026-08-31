@@ -32,6 +32,10 @@ describe('parseIso8601Duration', () => {
 		expect(parseIso8601Duration('P1DT2H')).toBe(86_400 + 7_200);
 	});
 
+	it('桁あふれする値は undefined', () => {
+		expect(parseIso8601Duration(`PT${'9'.repeat(400)}S`)).toBeUndefined();
+	});
+
 	it('妥当でない表記は undefined', () => {
 		expect(parseIso8601Duration('20S')).toBeUndefined();
 		expect(parseIso8601Duration('PT')).toBeUndefined();
@@ -65,6 +69,20 @@ describe('fillTemplate', () => {
 		expect(fillTemplate('$Bandwidth$/$Time$.m4s', { Bandwidth: 800_000, Time: 12 })).toBe(
 			'800000/12.m4s',
 		);
+	});
+
+	it('桁指定が大きすぎれば書式を無視する', () => {
+		// 制限しないと 1 本の URL で数百 MB の文字列を作られ、
+		// さらに大きな値では padStart が RangeError を投げる
+		expect(fillTemplate('seg-$Number%0999999999d$.m4s', { Number: 7 })).toBe('seg-7.m4s');
+		expect(fillTemplate('seg-$Number%017d$.m4s', { Number: 7 })).toBe('seg-7.m4s');
+		// 現実的な桁は従来どおり
+		expect(fillTemplate('seg-$Number%016d$.m4s', { Number: 7 })).toBe('seg-0000000000000007.m4s');
+	});
+
+	it('Object.prototype のキーを変数として拾わない', () => {
+		expect(fillTemplate('$constructor$-$Number$.m4s', { Number: 3 })).toBe('$constructor$-3.m4s');
+		expect(fillTemplate('$toString$.m4s', {})).toBe('$toString$.m4s');
 	});
 });
 
@@ -326,6 +344,34 @@ describe('parseMpd', () => {
 			expect(rates?.[3]).toBeUndefined();
 		});
 
+		it('コーデックでも判別できなければ unknown', () => {
+			const parsed = unwrap(
+				parseMpd(
+					mpd(
+						`<AdaptationSet><Representation id="t" codecs="wvtt"><BaseURL>t.vtt</BaseURL></Representation></AdaptationSet>`,
+					),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.contentType).toBe('unknown');
+		});
+
+		it('コーデックから種別を判別する', () => {
+			// contentType も mimeType も無い AdaptationSet は実在する。
+			// unknown に落とすと、音声が別立ての MPD で分離判定をすり抜け、
+			// 無音の動画が出来上がる
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet><Representation id="v" codecs="avc1.640028"><BaseURL>v.mp4</BaseURL></Representation></AdaptationSet>
+<AdaptationSet><Representation id="a" codecs="mp4a.40.2"><BaseURL>a.mp4</BaseURL></Representation></AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets.map((set) => set.contentType)).toEqual(['video', 'audio']);
+		});
+
 		it('種別の手がかりが無ければ unknown', () => {
 			const parsed = unwrap(
 				parseMpd(mpd('<AdaptationSet><Representation id="x" /></AdaptationSet>'), BASE),
@@ -370,6 +416,38 @@ describe('parseMpd', () => {
 			expect(parsed.adaptationSets[0]?.contentType).toBe('unknown');
 		});
 
+		it('桁数が多すぎる range は無視する', () => {
+			// Number() が Infinity になり、`Range: bytes=Infinity-NaN` を作ってしまう
+			const huge = '9'.repeat(400);
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<Representation id="v0">
+		<SegmentList><SegmentURL media="a.m4s" mediaRange="0-${huge}" /></SegmentList>
+	</Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments[0]?.byteRange).toBeUndefined();
+		});
+
+		it('startNumber が整数でなければ 1 として扱う', () => {
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<Representation id="v0"><SegmentTemplate media="s$Number$.m4s" duration="10" startNumber="-5" /></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments[0]?.uri).toBe(
+				'https://cdn.example.com/dash/s1.m4s',
+			);
+		});
+
 		it('壊れた range は無視する', () => {
 			const parsed = unwrap(
 				parseMpd(
@@ -391,16 +469,17 @@ describe('parseMpd', () => {
 		});
 
 		it('再生時間が 0 ならセグメントを作らない', () => {
+			// 初期化セグメントの指定があっても、本数が 0 なら並びは空
 			const content = mpd(
 				`<AdaptationSet contentType="video">
-	<Representation id="v0"><SegmentTemplate media="$Number$.m4s" duration="10" /></Representation>
+	<Representation id="v0"><SegmentTemplate initialization="init.mp4" media="$Number$.m4s" duration="10" /></Representation>
 </AdaptationSet>`,
 				'type="static" mediaPresentationDuration="PT0S"',
 			);
+			const representation = unwrap(parseMpd(content, BASE)).adaptationSets[0]?.representations[0];
 
-			expect(
-				unwrap(parseMpd(content, BASE)).adaptationSets[0]?.representations[0]?.segments,
-			).toEqual([]);
+			expect(representation?.segments).toEqual([]);
+			expect(representation?.initSegment?.uri).toBe('https://cdn.example.com/dash/init.mp4');
 		});
 
 		it('全体長が分からなければセグメントを作らない', () => {
@@ -415,6 +494,59 @@ describe('parseMpd', () => {
 			expect(
 				unwrap(parseMpd(content, BASE)).adaptationSets[0]?.representations[0]?.segments,
 			).toEqual([]);
+		});
+	});
+
+	describe('複数 Period', () => {
+		it('複数 Period を持つ MPD は弾く', () => {
+			// **平坦化しない。** 先頭の Period だけを保存して全長は合計を出す、
+			// という「黙って切り詰めたファイル」になる
+			const content = `<MPD type="static" mediaPresentationDuration="PT20S">
+	<Period duration="PT10S"><AdaptationSet contentType="video">
+		<Representation id="a"><BaseURL>a.mp4</BaseURL></Representation>
+	</AdaptationSet></Period>
+	<Period duration="PT10S"><AdaptationSet contentType="video">
+		<Representation id="b"><BaseURL>b.mp4</BaseURL></Representation>
+	</AdaptationSet></Period>
+</MPD>`;
+
+			expect(parseMpd(content, BASE)).toEqual({
+				ok: false,
+				error: { type: 'multiple-periods' },
+			});
+		});
+
+		it('Period 直下のセグメント指定を引き継ぐ', () => {
+			// DASH-IF のライブプロファイル等で使われる。読み損ねると
+			// Representation が「指定なし」になり、マニフェスト自身の URL を
+			// 1 本のメディアとして扱ってしまう
+			const content = `<MPD type="static" mediaPresentationDuration="PT20S">
+	<Period>
+		<SegmentTemplate initialization="init-$RepresentationID$.mp4" media="$RepresentationID$-$Number$.m4s" duration="10" />
+		<AdaptationSet contentType="video"><Representation id="v0" /></AdaptationSet>
+	</Period>
+</MPD>`;
+			const parsed = unwrap(parseMpd(content, BASE));
+
+			const representation = parsed.adaptationSets[0]?.representations[0];
+			expect(representation?.initSegment?.uri).toBe('https://cdn.example.com/dash/init-v0.mp4');
+			expect(representation?.segments.map((segment) => segment.uri)).toEqual([
+				'https://cdn.example.com/dash/v0-1.m4s',
+				'https://cdn.example.com/dash/v0-2.m4s',
+			]);
+		});
+
+		it('セグメント指定も BaseURL も無ければセグメントを持たない', () => {
+			// **マニフェスト自身の URL を 1 本のメディアにしない。**
+			// MPD の XML を .mp4 として保存する経路になる
+			const parsed = unwrap(
+				parseMpd(
+					mpd('<AdaptationSet contentType="video"><Representation id="v" /></AdaptationSet>'),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments).toEqual([]);
 		});
 	});
 
@@ -444,7 +576,7 @@ describe('parseMpd', () => {
 		});
 
 		it('SegmentURL が多すぎれば too-many-segments', () => {
-			const many = '<SegmentURL media="a.m4s" />'.repeat(20_001);
+			const many = '<SegmentURL media="a.m4s" />'.repeat(50_001);
 			const content = mpd(`<AdaptationSet contentType="video">
 	<Representation id="v0"><SegmentList>${many}</SegmentList></Representation>
 </AdaptationSet>`);
@@ -829,11 +961,42 @@ describe('parseMpd', () => {
 		it('SegmentTimeline の本数が多すぎれば弾く', () => {
 			const content = mpd(`<AdaptationSet contentType="video">
 	<Representation id="v0">
-		<SegmentTemplate media="$Time$.m4s"><SegmentTimeline><S t="0" d="1" r="20001" /></SegmentTimeline></SegmentTemplate>
+		<SegmentTemplate media="$Time$.m4s"><SegmentTimeline><S t="0" d="1" r="50001" /></SegmentTimeline></SegmentTemplate>
 	</Representation>
 </AdaptationSet>`);
 
 			expect(parseMpd(content, BASE)).toEqual({ ok: false, error: { type: 'too-many-segments' } });
+		});
+
+		it('Representation をまたいだ合計にも上限を掛ける', () => {
+			// **Representation ごとの上限だけでは足りない。** 継承された
+			// SegmentTemplate のもとでは、1 行足すたびに数千本ずつ増やせる。
+			// 解析は Service Worker で走るため、総量を抑えないと拡張機能ごと止まる
+			const representations = Array.from(
+				{ length: 30 },
+				(_, index) => `<Representation id="r${index}" bandwidth="${index + 1}" />`,
+			).join('');
+
+			const content = mpd(
+				`<AdaptationSet contentType="video">
+	<SegmentTemplate media="$RepresentationID$-$Number$.m4s" duration="1" />
+	${representations}
+</AdaptationSet>`,
+				'type="static" mediaPresentationDuration="PT5000S"',
+			);
+
+			expect(parseMpd(content, BASE)).toEqual({ ok: false, error: { type: 'too-many-segments' } });
+		});
+
+		it('Representation が多すぎれば弾く', () => {
+			const many = Array.from(
+				{ length: 201 },
+				(_, index) => `<Representation id="r${index}" />`,
+			).join('');
+
+			expect(
+				parseMpd(mpd(`<AdaptationSet contentType="video">${many}</AdaptationSet>`), BASE),
+			).toEqual({ ok: false, error: { type: 'too-many-segments' } });
 		});
 
 		it('SegmentTimeline の d が無ければ too-many-segments として弾く', () => {

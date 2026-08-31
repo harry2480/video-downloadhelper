@@ -15,6 +15,15 @@ import type { DashAdaptationSet, DashRepresentation, ParsedMpd } from './types';
 const DRM_UNSUPPORTED = 'この動画は DRM で保護されているため対応していません';
 const LIVE_UNSUPPORTED = 'ライブ配信の保存には未対応です';
 const NO_VIDEO = '保存できる映像が見つかりませんでした';
+const MULTIPLE_PERIODS = '複数の Period を持つ MPD には未対応です';
+
+/**
+ * `Representation@id` の長さの上限。
+ *
+ * id はメッセージに載せて Offscreen へ渡す。`shared/messages.ts` の上限を
+ * 超えると要求ごと捨てられ、保存が始まらないまま「取得中」で止まる。
+ */
+const MAX_REPRESENTATION_ID_LENGTH = 256;
 
 type DashAnalysis = {
 	variants?: MediaVariant[];
@@ -25,6 +34,14 @@ type DashAnalysis = {
 };
 
 type DashAnalysisError = { type: 'not-an-mpd' } | { type: 'unparsable' };
+
+/** 保存できない理由が確定した結果。 */
+function rejected(reason: string, duration: number | undefined) {
+	return {
+		ok: true as const,
+		value: { ...(duration !== undefined && { duration }), unsupportedReason: reason },
+	};
+}
 
 /**
  * 音声のみの AdaptationSet があるか。
@@ -49,10 +66,10 @@ function estimateSize(
 	bandwidth: number | undefined,
 	durationSeconds: number | undefined,
 ): number | undefined {
+	// 再生時間が有限であることは parseIso8601Duration が保証する
 	if (bandwidth === undefined || bandwidth <= 0) return undefined;
-	if (durationSeconds === undefined || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-		return undefined;
-	}
+	if (durationSeconds === undefined || durationSeconds <= 0) return undefined;
+
 	return Math.round((bandwidth / 8) * durationSeconds);
 }
 
@@ -67,7 +84,8 @@ function toVariant(
 
 	return {
 		id: `v${index}`,
-		...(representation.id !== '' && { sourceId: representation.id }),
+		// 一覧へ出す時点で id の有無と長さは確かめてある
+		sourceId: representation.id,
 		// **セグメントではなく Representation の id を URL 代わりに持たない。**
 		// 保存対象は「初期化セグメント + セグメントの並び」であり、単一の URL では
 		// 表せない。ここでは先頭セグメントの URL を代表として持ち、実際の取得は
@@ -96,6 +114,10 @@ export function analyzeMpd(
 ): { ok: true; value: DashAnalysis } | { ok: false; error: DashAnalysisError } {
 	const parsed = parseMpd(content, baseUrl);
 	if (!parsed.ok) {
+		// 複数 Period は「解析できない」ではなく「対応していない」。
+		// 理由を出さないと、ユーザーには何も起きていないように見える
+		if (parsed.error.type === 'multiple-periods') return rejected(MULTIPLE_PERIODS, undefined);
+
 		return {
 			ok: false,
 			error: parsed.error.type === 'not-an-mpd' ? { type: 'not-an-mpd' } : { type: 'unparsable' },
@@ -108,35 +130,30 @@ export function analyzeMpd(
 	if (mpd.drmReason !== undefined) {
 		return { ok: true, value: { drm: true, unsupportedReason: DRM_UNSUPPORTED } };
 	}
-	if (mpd.isLive) {
-		return {
-			ok: true,
-			value: { ...(duration !== undefined && { duration }), unsupportedReason: LIVE_UNSUPPORTED },
-		};
-	}
+	if (mpd.isLive) return rejected(LIVE_UNSUPPORTED, duration);
 
 	const primary = pickPrimarySet(mpd);
-	if (primary === undefined) {
-		return {
-			ok: true,
-			value: { ...(duration !== undefined && { duration }), unsupportedReason: NO_VIDEO },
-		};
-	}
+	if (primary === undefined) return rejected(NO_VIDEO, duration);
 
-	// **スキームをここで絞る。** MPD の中身はページ側が決められるため、
-	// 相対 URL の解決結果に file: や data: が現れうる
+	// **一覧に出すのは実際に保存できるものだけ。** 押せるのに保存できない
+	// 状態を作らない（`media/downloadable.ts` と同じ方針）
 	const usable: { representation: DashRepresentation; url: string }[] = [];
 	for (const representation of primary.representations) {
+		// セグメントが 1 本も無ければ、選ばせても保存の段で必ず失敗する
+		if (representation.segments.length === 0) continue;
+
+		// id が無い / 長すぎるものは選択を運べない。運べないまま一覧へ出すと、
+		// 選んだのと違う画質（先頭）が保存される
+		if (representation.id === '') continue;
+		if (representation.id.length > MAX_REPRESENTATION_ID_LENGTH) continue;
+
+		// **スキームをここで絞る。** MPD の中身はページ側が決められるため、
+		// 相対 URL の解決結果に file: や data: が現れうる
 		const first = representation.initSegment?.uri ?? representation.segments[0]?.uri;
 		if (first !== undefined && isFetchableUrl(first)) usable.push({ representation, url: first });
 	}
 
-	if (usable.length === 0) {
-		return {
-			ok: true,
-			value: { ...(duration !== undefined && { duration }), unsupportedReason: NO_VIDEO },
-		};
-	}
+	if (usable.length === 0) return rejected(NO_VIDEO, duration);
 
 	// 高画質を先頭にする。既定で最高品質を選ばせるため（要件定義 4.4）
 	const sorted = [...usable].sort(

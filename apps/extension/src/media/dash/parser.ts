@@ -1,4 +1,5 @@
 import { type Result, err, ok } from '../../shared/utils';
+import { isAudioCodec, isVideoCodec } from '../codecs';
 import { resolveUrl } from '../url';
 import type {
 	DashAdaptationSet,
@@ -21,12 +22,26 @@ import { type XmlElement, childNamed, childrenNamed, parseXml } from './xml';
  */
 
 /**
- * 1 つの Representation が持てるセグメント数の上限。
+ * MPD 全体で展開してよいセグメント数の上限。
  *
- * MPD の中身はページ側が決められる。SegmentTemplate は
- * `duration` と全体長から本数が決まるため、値によっては無限に近い数になる。
+ * MPD の中身はページ側が決められる。**Representation ごとの上限だけでは
+ * 足りない。** AdaptationSet の SegmentTemplate は配下へ継承されるため、
+ * `<Representation id="..."/>` を 1 行足すだけで数万本ずつ増やせる。
+ * 解析は Service Worker で走るので、総量を抑えないと拡張機能ごと止まる。
  */
-const MAX_SEGMENTS_PER_REPRESENTATION = 20_000;
+const MAX_SEGMENTS_PER_MPD = 50_000;
+
+/** 1 つの MPD が持てる Representation の数。正常な配信では多くても数十。 */
+const MAX_REPRESENTATIONS_PER_MPD = 200;
+
+/**
+ * テンプレートの桁指定（`%0Nd`）の上限。
+ *
+ * 幅は MPD が決める。制限しないと 1 本の URL で数百 MB の文字列を作られ、
+ * さらに大きな値では `padStart` が RangeError を投げて Result を突き破る。
+ * `$Number$` は現実的に 10 桁に収まる。
+ */
+const MAX_TEMPLATE_WIDTH = 16;
 
 /** DRM を示す ContentProtection の schemeIdUri。 */
 const DRM_SCHEMES: { pattern: RegExp; label: string }[] = [
@@ -64,14 +79,17 @@ export function parseIso8601Duration(value: string | undefined): number | undefi
 		return undefined;
 	}
 
-	return (
+	const total =
 		Number(years ?? 0) * 365 * 86_400 +
 		Number(months ?? 0) * 30 * 86_400 +
 		Number(days ?? 0) * 86_400 +
 		Number(hours ?? 0) * 3_600 +
 		Number(minutes ?? 0) * 60 +
-		Number(seconds ?? 0)
-	);
+		Number(seconds ?? 0);
+
+	// 桁数に制限が無いため、長い数字列は Infinity になる。
+	// 通すと本数の算出や推定サイズが壊れる
+	return Number.isFinite(total) ? total : undefined;
 }
 
 /** `30/1` 形式にも対応した frameRate の解析。 */
@@ -102,12 +120,17 @@ export function fillTemplate(
 		if (body === undefined) return '$';
 
 		const [name, format] = body.split('%0');
-		const raw = values[name as keyof typeof values];
-		if (raw === undefined) return match;
+		// **自前のキーだけを見る。** `$constructor$` のような名前で
+		// Object.prototype の値を拾うと、URL が壊れた文字列になる
+		if (name === undefined || !Object.hasOwn(values, name)) return match;
 
-		const text = String(raw);
-		// 幅は正規表現で数字に限っているので、ここでの解析は必ず成功する
-		return format === undefined ? text : text.padStart(Number.parseInt(format, 10), '0');
+		// hasOwn を通っているので値は必ずある
+		const text = String(values[name as keyof typeof values]);
+		if (format === undefined) return text;
+
+		// 桁指定が現実的でなければ書式を無視する。巨大な文字列を作らせない
+		const width = Number.parseInt(format, 10);
+		return width > MAX_TEMPLATE_WIDTH ? text : text.padStart(width, '0');
 	});
 }
 
@@ -120,6 +143,9 @@ function parseRangeAttribute(value: string | undefined): DashSegment['byteRange'
 
 	const start = Number(match[1]);
 	const end = Number(match[2]);
+	// 桁数の制限が無いため、長い数字列は Infinity になる。
+	// 通すと `Range: bytes=Infinity-NaN` を組み立ててしまう（HLS 側と揃える）
+	if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return undefined;
 	if (end < start) return undefined;
 
 	return { offset: start, length: end - start + 1 };
@@ -140,11 +166,28 @@ function resolveBase(element: XmlElement, parentBase: string): Result<string, Mp
 	return ok(resolved.value);
 }
 
-function toContentType(value: string | undefined, mimeType: string | undefined): DashContentType {
+/**
+ * AdaptationSet の種別を決める。
+ *
+ * **コーデックまで見る。** `contentType` も `mimeType` も無く `codecs` だけを
+ * 持つ AdaptationSet は実在する。`unknown` に落とすと、音声が別立ての MPD で
+ * 「映像と音声が分かれている」判定をすり抜け、無音の動画が出来上がる。
+ */
+function toContentType(
+	value: string | undefined,
+	mimeType: string | undefined,
+	codecs: readonly string[] | undefined,
+): DashContentType {
 	const source = (value ?? mimeType ?? '').toLowerCase();
 	if (source.includes('video')) return 'video';
 	if (source.includes('audio')) return 'audio';
 	if (source.includes('text') || source.includes('ttml') || source.includes('vtt')) return 'text';
+
+	if (codecs !== undefined) {
+		if (codecs.some(isVideoCodec)) return 'video';
+		if (codecs.some(isAudioCodec)) return 'audio';
+	}
+
 	return 'unknown';
 }
 
@@ -157,8 +200,11 @@ function detectDrm(element: XmlElement): string | undefined {
 	return undefined;
 }
 
+/** 展開してよい残り本数。MPD 全体で 1 つを共有する。 */
+type SegmentBudget = { remaining: number };
+
 /** SegmentTimeline の `<S t d r>` を展開して開始時刻の並びにする。 */
-function expandTimeline(timeline: XmlElement): number[] | undefined {
+function expandTimeline(timeline: XmlElement, budget: SegmentBudget): number[] | undefined {
 	const times: number[] = [];
 	let current = 0;
 
@@ -177,7 +223,7 @@ function expandTimeline(timeline: XmlElement): number[] | undefined {
 		for (let index = 0; index <= repeat; index += 1) {
 			times.push(current);
 			current += duration;
-			if (times.length > MAX_SEGMENTS_PER_REPRESENTATION) return undefined;
+			if (times.length > budget.remaining) return undefined;
 		}
 	}
 
@@ -196,6 +242,7 @@ function fromSegmentTemplate(
 	representationId: string,
 	bandwidth: number | undefined,
 	periodDuration: number | undefined,
+	budget: SegmentBudget,
 ): Result<SegmentSource, MpdParseError> {
 	const values = {
 		RepresentationID: representationId,
@@ -213,13 +260,18 @@ function fromSegmentTemplate(
 	const media = template.attributes.media;
 	if (media === undefined) return ok({ ...(initSegment && { initSegment }), segments: [] });
 
-	const startNumber = parseNumber(template.attributes.startNumber) ?? 1;
+	// 仕様は unsignedInt。負値や小数をそのまま URL へ入れない
+	const declaredStart = parseNumber(template.attributes.startNumber);
+	const startNumber =
+		declaredStart !== undefined && Number.isInteger(declaredStart) && declaredStart >= 0
+			? declaredStart
+			: 1;
 	const timescale = parseNumber(template.attributes.timescale) ?? 1;
 	const segments: DashSegment[] = [];
 
 	const timelineElement = childNamed(template, 'SegmentTimeline');
 	if (timelineElement !== undefined) {
-		const times = expandTimeline(timelineElement);
+		const times = expandTimeline(timelineElement, budget);
 		if (times === undefined) return err({ type: 'too-many-segments' });
 
 		for (const [index, time] of times.entries()) {
@@ -243,7 +295,7 @@ function fromSegmentTemplate(
 	// duration は正、periodDuration は有限と確かめてあるので count は有限
 	const count = Math.ceil(periodDuration / (duration / timescale));
 	if (count <= 0) return ok({ ...(initSegment && { initSegment }), segments: [] });
-	if (count > MAX_SEGMENTS_PER_REPRESENTATION) return err({ type: 'too-many-segments' });
+	if (count > budget.remaining) return err({ type: 'too-many-segments' });
 
 	for (let index = 0; index < count; index += 1) {
 		const resolved = resolveUrl(
@@ -258,7 +310,11 @@ function fromSegmentTemplate(
 }
 
 /** SegmentList からセグメントの並びを組み立てる。 */
-function fromSegmentList(list: XmlElement, base: string): Result<SegmentSource, MpdParseError> {
+function fromSegmentList(
+	list: XmlElement,
+	base: string,
+	budget: SegmentBudget,
+): Result<SegmentSource, MpdParseError> {
 	let initSegment: DashSegment | undefined;
 
 	const initialization = childNamed(list, 'Initialization');
@@ -274,9 +330,7 @@ function fromSegmentList(list: XmlElement, base: string): Result<SegmentSource, 
 	}
 
 	const entries = childrenNamed(list, 'SegmentURL');
-	if (entries.length > MAX_SEGMENTS_PER_REPRESENTATION) {
-		return err({ type: 'too-many-segments' });
-	}
+	if (entries.length > budget.remaining) return err({ type: 'too-many-segments' });
 
 	const segments: DashSegment[] = [];
 	for (const entry of entries) {
@@ -323,11 +377,49 @@ function mergeSegmentElements(
 	};
 }
 
+type SegmentDeclarations = { template?: XmlElement; list?: XmlElement; segmentBase?: XmlElement };
+
+/** ある階層のセグメント指定を読み出す。 */
+function readDeclarations(element: XmlElement): SegmentDeclarations {
+	const template = childNamed(element, 'SegmentTemplate');
+	const list = childNamed(element, 'SegmentList');
+	const segmentBase = childNamed(element, 'SegmentBase');
+
+	return {
+		...(template !== undefined && { template }),
+		...(list !== undefined && { list }),
+		...(segmentBase !== undefined && { segmentBase }),
+	};
+}
+
+/**
+ * 親の指定へ子の指定を重ねる。
+ *
+ * **継承は属性ごとに効く（ISO/IEC 23009-1 5.3.9.2）。** 丸ごと置き換えると、
+ * 親が media/initialization を、子が duration だけを持つ一般的な MPD で
+ * セグメントが 1 本も作れなくなる。
+ */
+function inheritDeclarations(
+	parent: SegmentDeclarations,
+	child: SegmentDeclarations,
+): SegmentDeclarations {
+	const template = mergeSegmentElements(parent.template, child.template);
+	const list = mergeSegmentElements(parent.list, child.list);
+	const segmentBase = mergeSegmentElements(parent.segmentBase, child.segmentBase);
+
+	return {
+		...(template !== undefined && { template }),
+		...(list !== undefined && { list }),
+		...(segmentBase !== undefined && { segmentBase }),
+	};
+}
+
 function parseRepresentation(
 	element: XmlElement,
 	parentBase: string,
-	inherited: { template?: XmlElement; list?: XmlElement; segmentBase?: XmlElement },
+	inherited: SegmentDeclarations,
 	periodDuration: number | undefined,
+	budget: SegmentBudget,
 ): Result<DashRepresentation, MpdParseError> {
 	const base = resolveBase(element, parentBase);
 	if (!base.ok) return base;
@@ -335,31 +427,53 @@ function parseRepresentation(
 	const id = element.attributes.id ?? '';
 	const bandwidth = parseNumber(element.attributes.bandwidth);
 
-	// **継承は属性ごとに効く（ISO/IEC 23009-1 5.3.9.2）。** 丸ごと置き換えると、
-	// 親が media/initialization を、子が duration だけを持つ一般的な MPD で
-	// セグメントが 1 本も作れなくなる
-	const template = mergeSegmentElements(inherited.template, childNamed(element, 'SegmentTemplate'));
-	const list = mergeSegmentElements(inherited.list, childNamed(element, 'SegmentList'));
-	const segmentBase = mergeSegmentElements(
-		inherited.segmentBase,
-		childNamed(element, 'SegmentBase'),
-	);
+	// **自身の宣言を先に見る。** 内側の宣言が勝つため、親が SegmentTemplate、
+	// 子が SegmentList を持つ MPD で子の指定を無視しない
+	const own = readDeclarations(element);
+	const declared = inheritDeclarations(inherited, own);
+	const preferred =
+		own.template !== undefined
+			? 'template'
+			: own.list !== undefined
+				? 'list'
+				: own.segmentBase !== undefined
+					? 'segmentBase'
+					: declared.template !== undefined
+						? 'template'
+						: declared.list !== undefined
+							? 'list'
+							: declared.segmentBase !== undefined
+								? 'segmentBase'
+								: undefined;
 
 	let source: SegmentSource;
-	if (template !== undefined) {
-		const built = fromSegmentTemplate(template, base.value, id, bandwidth, periodDuration);
+	if (preferred === 'template' && declared.template !== undefined) {
+		const built = fromSegmentTemplate(
+			declared.template,
+			base.value,
+			id,
+			bandwidth,
+			periodDuration,
+			budget,
+		);
 		if (!built.ok) return built;
 		source = built.value;
-	} else if (list !== undefined) {
-		const built = fromSegmentList(list, base.value);
+	} else if (preferred === 'list' && declared.list !== undefined) {
+		const built = fromSegmentList(declared.list, base.value, budget);
 		if (!built.ok) return built;
 		source = built.value;
-	} else if (segmentBase !== undefined) {
+	} else if (preferred === 'segmentBase') {
 		source = fromSegmentBase(base.value);
-	} else {
-		// どの指定も無ければ BaseURL 自体が 1 本のファイル
+	} else if (childNamed(element, 'BaseURL') !== undefined) {
+		// **BaseURL が宣言されているときだけ「全体で 1 本」とみなす。**
+		// そうでないと、セグメント指定を読み損ねた Representation が
+		// マニフェスト自身の URL を指し、MPD の XML を .mp4 として保存する
 		source = { segments: [{ uri: base.value }] };
+	} else {
+		source = { segments: [] };
 	}
+
+	budget.remaining -= source.segments.length;
 
 	const codecs = element.attributes.codecs
 		?.split(',')
@@ -401,11 +515,24 @@ export function parseMpd(content: string, baseUrl: string): Result<ParsedMpd, Mp
 	let drmReason = detectDrm(root);
 	const adaptationSets: DashAdaptationSet[] = [];
 
-	for (const period of childrenNamed(root, 'Period')) {
+	// **MPD 全体で 1 つの予算を共有する。** Representation ごとの上限だけでは、
+	// 継承された SegmentTemplate のもとで 1 行足すたびに数万本ずつ増やせる
+	const budget: SegmentBudget = { remaining: MAX_SEGMENTS_PER_MPD };
+	let representationCount = 0;
+
+	const periods = childrenNamed(root, 'Period');
+
+	// **複数 Period は扱わない。** 平坦化すると先頭の Period だけを保存して、
+	// 全長は合計を表示する（黙って切り詰めたファイルになる）
+	if (periods.length > 1) return err({ type: 'multiple-periods' });
+
+	for (const period of periods) {
 		const periodBase = resolveBase(period, mpdBase.value);
 		if (!periodBase.ok) return periodBase;
 
 		const periodDuration = parseIso8601Duration(period.attributes.duration) ?? duration;
+		// Period 直下にもセグメント指定を置ける（DASH-IF のライブプロファイル等）
+		const periodDeclarations = readDeclarations(period);
 
 		for (const adaptation of childrenNamed(period, 'AdaptationSet')) {
 			drmReason ??= detectDrm(adaptation);
@@ -413,25 +540,24 @@ export function parseMpd(content: string, baseUrl: string): Result<ParsedMpd, Mp
 			const adaptationBase = resolveBase(adaptation, periodBase.value);
 			if (!adaptationBase.ok) return adaptationBase;
 
-			// AdaptationSet 側の指定は配下の Representation へ引き継がれる
-			const inheritedTemplate = childNamed(adaptation, 'SegmentTemplate');
-			const inheritedList = childNamed(adaptation, 'SegmentList');
-			const inheritedBase = childNamed(adaptation, 'SegmentBase');
-			const inherited = {
-				...(inheritedTemplate !== undefined && { template: inheritedTemplate }),
-				...(inheritedList !== undefined && { list: inheritedList }),
-				...(inheritedBase !== undefined && { segmentBase: inheritedBase }),
-			};
+			// Period → AdaptationSet の順に積み上げて Representation へ渡す
+			const inherited = inheritDeclarations(periodDeclarations, readDeclarations(adaptation));
 
 			const representations: DashRepresentation[] = [];
 			for (const element of childrenNamed(adaptation, 'Representation')) {
 				drmReason ??= detectDrm(element);
+
+				representationCount += 1;
+				if (representationCount > MAX_REPRESENTATIONS_PER_MPD) {
+					return err({ type: 'too-many-segments' });
+				}
 
 				const parsed = parseRepresentation(
 					element,
 					adaptationBase.value,
 					inherited,
 					periodDuration,
+					budget,
 				);
 				if (!parsed.ok) return parsed;
 				representations.push(parsed.value);
@@ -443,6 +569,7 @@ export function parseMpd(content: string, baseUrl: string): Result<ParsedMpd, Mp
 				contentType: toContentType(
 					adaptation.attributes.contentType,
 					adaptation.attributes.mimeType ?? representations[0]?.mimeType,
+					representations[0]?.codecs,
 				),
 				...(adaptation.attributes.lang !== undefined && { lang: adaptation.attributes.lang }),
 				representations,

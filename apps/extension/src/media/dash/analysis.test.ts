@@ -155,8 +155,18 @@ describe('analyzeMpd', () => {
 		});
 
 		it('全体長が 0 なら推定サイズを出さない', () => {
+			// セグメントは BaseURL 由来（全体長に依らず 1 本）にして、
+			// 一覧から落ちないようにする
 			const analysis = unwrap(
-				analyzeMpd(mpd(VIDEO_SET, 'type="static" mediaPresentationDuration="PT0S"'), BASE),
+				analyzeMpd(
+					mpd(
+						`<AdaptationSet contentType="video">
+	<Representation id="v" bandwidth="800000"><BaseURL>v.mp4</BaseURL></Representation>
+</AdaptationSet>`,
+						'type="static" mediaPresentationDuration="PT0S"',
+					),
+					BASE,
+				),
 			);
 
 			expect(analysis.variants?.[0]?.estimatedSize).toBeUndefined();
@@ -246,6 +256,81 @@ describe('analyzeMpd', () => {
 
 			expect(analysis.duration).toBeUndefined();
 			expect(analysis.unsupportedReason).toContain('映像');
+		});
+	});
+
+	describe('一覧へ出さない Representation', () => {
+		it('id が無いものは出さない', () => {
+			// **選択を運べない。** 一覧へ出すと、選んだのと違う画質（先頭）が
+			// 保存される
+			const analysis = unwrap(
+				analyzeMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<Representation width="1920" height="1080"><BaseURL>a.mp4</BaseURL></Representation>
+	<Representation id="ok" width="640" height="360"><BaseURL>b.mp4</BaseURL></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(analysis.variants).toHaveLength(1);
+			expect(analysis.variants?.[0]?.sourceId).toBe('ok');
+		});
+
+		it('id が長すぎるものは出さない', () => {
+			// メッセージの上限を超えると要求ごと捨てられ、保存が始まらないまま
+			// 「取得中」で止まる
+			const analysis = unwrap(
+				analyzeMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<Representation id="${'x'.repeat(257)}"><BaseURL>a.mp4</BaseURL></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(analysis.unsupportedReason).toContain('映像');
+		});
+
+		it('セグメントが 1 本も無いものは出さない', () => {
+			// 押せるのに保存できない状態を作らない
+			const analysis = unwrap(
+				analyzeMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<Representation id="empty"><SegmentTemplate initialization="init.mp4" /></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(analysis.unsupportedReason).toContain('映像');
+		});
+
+		it('複数 Period は理由を出す', () => {
+			// 解析できないのではなく、対応していない
+			const content = `<MPD type="static" mediaPresentationDuration="PT20S">
+	<Period><AdaptationSet contentType="video">
+		<Representation id="a"><BaseURL>a.mp4</BaseURL></Representation>
+	</AdaptationSet></Period>
+	<Period><AdaptationSet contentType="video">
+		<Representation id="b"><BaseURL>b.mp4</BaseURL></Representation>
+	</AdaptationSet></Period>
+</MPD>`;
+
+			expect(unwrap(analyzeMpd(content, BASE)).unsupportedReason).toContain('Period');
+		});
+
+		it('再生時間が桁あふれしていれば全体長として扱わない', () => {
+			// Infinity を通すと本数の算出や推定サイズが壊れる
+			const analysis = unwrap(
+				analyzeMpd(
+					mpd(VIDEO_SET, `type="static" mediaPresentationDuration="PT${'9'.repeat(400)}S"`),
+					BASE,
+				),
+			);
+
+			expect(analysis.duration).toBeUndefined();
+			expect(analysis.variants?.[0]?.estimatedSize).toBeUndefined();
 		});
 	});
 

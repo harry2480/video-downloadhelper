@@ -1,3 +1,4 @@
+import { hasSeparateAudio } from '../media/dash/analysis';
 import type { DashRepresentation, ParsedMpd } from '../media/dash/types';
 import { type Result, err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
 import type { MediaContainer, PlannedSegment } from './download-plan';
@@ -33,6 +34,14 @@ type DashDownloadRejection = { reason: string };
 
 type PlanOptions = {
 	/**
+	 * 1 本のファイルで全体を成す構成に許すバイト数。
+	 *
+	 * SegmentBase の DASH はセグメントに分かれていない。セグメント 1 本ぶんの
+	 * 上限（64MB）では必ず足りず、大きな動画が必ず失敗する。
+	 */
+	singleSegmentMaxBytes?: number;
+
+	/**
 	 * 保存する Representation の `id`。
 	 *
 	 * **位置でも URL でもなく、配信側が付けた識別子で選ぶ。** 位置は再解析で
@@ -58,13 +67,12 @@ export function planDashDownload(
 	if (mpd.isLive) return err({ reason: LIVE });
 
 	const video = mpd.adaptationSets.find((set) => set.contentType === 'video');
-	const audio = mpd.adaptationSets.find((set) => set.contentType === 'audio');
 
 	// **映像と音声が分かれていれば結合が要る。** 映像だけを保存すると
-	// 「音の出ない動画」が黙って出来上がる
-	if (video !== undefined && audio !== undefined) return err({ reason: SEPARATE_AUDIO });
+	// 「音の出ない動画」が黙って出来上がる。判定は解析側と共有する
+	if (video !== undefined && hasSeparateAudio(mpd)) return err({ reason: SEPARATE_AUDIO });
 
-	const primary = video ?? audio;
+	const primary = video ?? mpd.adaptationSets.find((set) => set.contentType === 'audio');
 	if (primary === undefined) return err({ reason: NO_SEGMENTS });
 
 	const candidates = primary.representations;
@@ -97,6 +105,12 @@ export function planDashDownload(
 
 	for (const segment of selected.segments) {
 		planned.push({ url: segment.uri, ...(segment.byteRange && { byteRange: segment.byteRange }) });
+	}
+
+	// 1 本で全体を成すなら、セグメント 1 本ぶんの上限では足りない
+	const single = planned.length === 1 ? planned[0] : undefined;
+	if (single !== undefined && options.singleSegmentMaxBytes !== undefined) {
+		single.maxBytes = options.singleSegmentMaxBytes;
 	}
 
 	if (planned.length > MAX_SEGMENTS) return err({ reason: TOO_MANY_SEGMENTS });

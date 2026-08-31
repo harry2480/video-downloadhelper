@@ -314,6 +314,34 @@ describe('planDashDownload', () => {
 		});
 	});
 
+	describe('1 本で全体を成す構成', () => {
+		it('上限を渡せばその 1 本に適用する', () => {
+			// SegmentBase の DASH はセグメントに分かれていない。
+			// セグメント 1 本ぶんの上限（64MB）では大きな動画が必ず失敗する
+			const single: DashRepresentation = {
+				id: 'whole',
+				segments: [{ uri: 'https://cdn.example.com/whole.mp4' }],
+			};
+
+			const plan = planDashDownload(
+				mpd({ adaptationSets: [videoSet({ representations: [single] })] }),
+				{ singleSegmentMaxBytes: 2 * 1024 * 1024 * 1024 },
+			);
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.segments[0]?.maxBytes).toBe(2 * 1024 * 1024 * 1024);
+		});
+
+		it('複数セグメントには適用しない', () => {
+			const plan = planDashDownload(mpd(), { singleSegmentMaxBytes: 1_000 });
+
+			expect(plan.ok).toBe(true);
+			if (!plan.ok) return;
+			expect(plan.value.segments.every((segment) => segment.maxBytes === undefined)).toBe(true);
+		});
+	});
+
 	it('再生時間が分からなければ 0 として返す', () => {
 		const plan = planDashDownload({
 			isLive: false,

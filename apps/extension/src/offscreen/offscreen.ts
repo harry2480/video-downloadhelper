@@ -137,6 +137,9 @@ function buildPlan(
 
 		const plan = planDashDownload(parsed.value, {
 			allowPrivateHosts,
+			// 1 本で全体を成す構成（SegmentBase）では、セグメント 1 本ぶんの
+			// 上限では足りない。全体の上限をそのまま許す
+			singleSegmentMaxBytes: command.maxBytes,
 			...(command.representationId !== undefined && {
 				representationId: command.representationId,
 			}),

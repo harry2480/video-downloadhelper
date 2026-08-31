@@ -22,6 +22,14 @@ export type PlannedSegment = {
 		keyUrl: string;
 		iv: Uint8Array<ArrayBuffer>;
 	};
+
+	/**
+	 * この 1 本に許すバイト数の上限。
+	 *
+	 * 既定はセグメント 1 本ぶんの上限。DASH の SegmentBase のように
+	 * **1 ファイルで全体を成す**構成では、その上限では必ず足りない。
+	 */
+	maxBytes?: number;
 };
 
 /**

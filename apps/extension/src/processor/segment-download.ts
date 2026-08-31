@@ -91,12 +91,12 @@ export async function downloadSegments(
 		segment: PlannedSegment,
 		index: number,
 	): Promise<Result<Uint8Array<ArrayBuffer>, SegmentDownloadError>> {
-		const fetched = await fetcher.fetchBytes(
-			segment.url,
-			segment.byteRange === undefined
-				? undefined
-				: { range: { offset: segment.byteRange.offset, length: segment.byteRange.length } },
-		);
+		const fetched = await fetcher.fetchBytes(segment.url, {
+			...(segment.byteRange !== undefined && {
+				range: { offset: segment.byteRange.offset, length: segment.byteRange.length },
+			}),
+			...(segment.maxBytes !== undefined && { maxBytes: segment.maxBytes }),
+		});
 		if (!fetched.ok) return err({ type: 'fetch-failed', index, failure: fetched.error });
 
 		if (segment.decryption === undefined) return ok(fetched.value);

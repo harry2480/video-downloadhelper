@@ -59,4 +59,6 @@ export type MpdParseError =
 	| { type: 'no-representations' }
 	| { type: 'invalid-uri'; input: string }
 	/** セグメント数が多すぎる。ページ由来の入力に対する保険 */
-	| { type: 'too-many-segments' };
+	| { type: 'too-many-segments' }
+	/** 複数 Period。平坦化すると先頭だけを保存して黙って切り詰める */
+	| { type: 'multiple-periods' };

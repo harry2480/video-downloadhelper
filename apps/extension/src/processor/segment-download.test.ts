@@ -238,6 +238,20 @@ describe('バイトレンジ', () => {
 		]);
 	});
 
+	it('1 本ぶんの上限を Port へ渡す', async () => {
+		// SegmentBase の DASH は 1 ファイルで全体を成す。セグメント 1 本ぶんの
+		// 上限では大きな動画が必ず失敗する
+		const { fetcher, limits } = createFetcher();
+
+		await downloadSegments({
+			segments: [{ url: 'https://cdn.example.com/whole.mp4', maxBytes: 2_000 }],
+			fetcher,
+			maxBytes: 10_000,
+		});
+
+		expect(limits).toEqual([2_000]);
+	});
+
 	it('範囲が無ければ渡さない', async () => {
 		const { fetcher, ranges } = createFetcher();
 
