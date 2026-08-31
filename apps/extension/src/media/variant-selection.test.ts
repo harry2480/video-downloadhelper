@@ -51,6 +51,30 @@ describe('variantKey', () => {
 		expect(variantKey(h264)).not.toBe(variantKey(hevc));
 	});
 
+	it('キャッシュバスターだけが違えば同じ値になる', () => {
+		// ライブ HLS の再読み込みでは _hls_msn や cb だけが変わる。
+		// ここで別物とみなすと、更新のたびに選択が既定へ戻る
+		expect(variantKey(variant({ url: 'https://cdn.example.com/720.m3u8?cb=1' }))).toBe(
+			variantKey(variant({ url: 'https://cdn.example.com/720.m3u8?cb=2' })),
+		);
+		expect(variantKey(variant({ url: 'https://cdn.example.com/720.m3u8?_HLS_msn=10' }))).toBe(
+			variantKey(variant({ url: 'https://cdn.example.com/720.m3u8?_hls_msn=11' })),
+		);
+	});
+
+	it('認証トークンが違えば別の値になる', () => {
+		// 正規化はトークンを残す。落とすと本来別物のストリームまで同一視する
+		expect(variantKey(variant({ url: 'https://cdn.example.com/720.m3u8?token=a' }))).not.toBe(
+			variantKey(variant({ url: 'https://cdn.example.com/720.m3u8?token=b' })),
+		);
+	});
+
+	it('正規化できない URL でも区別が付く', () => {
+		expect(variantKey(variant({ url: 'not a url' }))).not.toBe(
+			variantKey(variant({ url: 'also not a url' })),
+		);
+	});
+
 	it('推定サイズの有無では変わらない', () => {
 		// 再生時間が後から分かって付くだけで、品質が変わったわけではない。
 		// ここで変わると、解析が進むたびに選択が既定へ戻ってしまう

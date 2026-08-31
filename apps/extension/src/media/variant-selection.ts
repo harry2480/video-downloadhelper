@@ -1,4 +1,5 @@
 import type { MediaVariant } from '../shared/types';
+import { toDedupeKey } from './url';
 
 /**
  * 品質選択の解決（要件定義 4.4）。
@@ -22,10 +23,18 @@ import type { MediaVariant } from '../shared/types';
  * URL だけでは、同じ URL で codecs だけが違う variant を区別できない。
  * 推定サイズ（`estimatedSize`）は含めない。再生時間が後から分かって
  * 付与されるだけで、品質が変わったわけではないため。
+ *
+ * **URL は重複判定と同じ正規化を通す。** ライブ HLS では再読み込みのたびに
+ * キャッシュバスターやシーケンス番号だけが異なる URL が流れてくる。素の URL を
+ * 使うと、同じ画質なのに毎回「消えた」と判定して選択が既定へ戻ってしまう。
  */
 export function variantKey(variant: MediaVariant): string {
+	// 正規化できない URL は先に isFetchableUrl で落ちているはずだが、
+	// 落ちなかった場合も素の URL で区別だけは付くようにする
+	const normalized = toDedupeKey(variant.url);
+
 	return JSON.stringify([
-		variant.url,
+		normalized.ok ? normalized.value : variant.url,
 		variant.bandwidth ?? null,
 		variant.width ?? null,
 		variant.height ?? null,
