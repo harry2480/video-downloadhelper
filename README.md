@@ -51,6 +51,7 @@ pnpm dev
 | `pnpm test:e2e` | E2E テスト（Playwright） |
 | `pnpm lint:fix` | 自動フォーマット・Lint 適用 |
 | `pnpm knip` | 未使用コード検出 |
+| `pnpm --filter extension icons` | `src/icons/icon.svg` からアイコン PNG を再生成 |
 
 ## アーキテクチャ
 
