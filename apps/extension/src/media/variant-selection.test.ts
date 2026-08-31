@@ -75,6 +75,16 @@ describe('variantKey', () => {
 		);
 	});
 
+	it('音声のみかどうかで別の値になる', () => {
+		// DASH では音声と映像の Representation が BaseURL を共有しうる。
+		// 映像側に解像度が無く帯域も近いと、これが無いと衝突する
+		const base = variant({ width: undefined, height: undefined, bandwidth: 128_000 });
+
+		expect(variantKey({ ...base, audioOnly: true })).not.toBe(
+			variantKey({ ...base, audioOnly: false }),
+		);
+	});
+
 	it('推定サイズの有無では変わらない', () => {
 		// 再生時間が後から分かって付くだけで、品質が変わったわけではない。
 		// ここで変わると、解析が進むたびに選択が既定へ戻ってしまう

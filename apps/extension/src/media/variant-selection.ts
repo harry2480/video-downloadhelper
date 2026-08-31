@@ -40,6 +40,9 @@ export function variantKey(variant: MediaVariant): string {
 		variant.height ?? null,
 		variant.videoCodec ?? null,
 		variant.audioCodec ?? null,
+		// DASH では音声と映像の Representation が BaseURL を共有しうる。
+		// 映像側に解像度が無く帯域も近いと、これが無いと衝突する
+		variant.audioOnly ?? null,
 	]);
 }
 

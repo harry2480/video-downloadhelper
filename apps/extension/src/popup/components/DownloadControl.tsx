@@ -1,5 +1,6 @@
 import { isDownloadable, isPendingSupport } from '../../media/downloadable';
 import { formatBytes } from '../../media/format';
+import { variantKey } from '../../media/variant-selection';
 import type {
 	DetectedMedia,
 	DownloadRequest,
@@ -104,7 +105,11 @@ export function DownloadControl({ media, variant, task, onDownload, onCancel, on
 		<div>
 			<Button
 				onClick={() =>
-					onDownload({ mediaId: media.id, ...(variant !== undefined && { variantId: variant.id }) })
+					onDownload({
+						mediaId: media.id,
+						// id は再解析で振り直され、Background 側で別の品質を指しうる
+						...(variant !== undefined && { variantKey: variantKey(variant) }),
+					})
 				}
 			>
 				保存
