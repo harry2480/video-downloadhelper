@@ -14,7 +14,6 @@ const MAX_BYTES = 5 * 1024 * 1024;
 function cancellableResponse(options: {
 	status?: number;
 	contentLength?: string;
-	onCancel?: () => void;
 	cancelThrows?: boolean;
 }): { response: Response; wasCancelled: () => boolean } {
 	let cancelled = false;
@@ -26,7 +25,6 @@ function cancellableResponse(options: {
 		},
 		cancel() {
 			cancelled = true;
-			options.onCancel?.();
 			if (options.cancelThrows === true) throw new Error('cancel failed');
 		},
 	});
@@ -147,7 +145,10 @@ describe('fetchText', () => {
 		it('破棄自体が失敗しても理由をすり替えない', async () => {
 			// 素の body.cancel() を try の中で待つと、既に壊れている
 			// ストリームで例外が飛び、http-error が network になる
-			const { response } = cancellableResponse({ status: 500, cancelThrows: true });
+			const { response, wasCancelled } = cancellableResponse({
+				status: 500,
+				cancelThrows: true,
+			});
 			const fetcher = fetcherReturning(response);
 
 			expect(await fetcher.fetchText('https://cdn.example.com/v.m3u8')).toEqual({
@@ -155,6 +156,8 @@ describe('fetchText', () => {
 				reason: 'http-error',
 				status: 500,
 			});
+			// 投げたということは、破棄自体は試みられている
+			expect(wasCancelled()).toBe(true);
 		});
 	});
 

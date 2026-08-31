@@ -17,6 +17,12 @@ import {
  * MVP 完了条件「Master Playlist から画質一覧を取得できる」に対応する。
  */
 
+/** フィクスチャが投げる回数（`media-hls-live.html` と対になる）。 */
+const PAGE_RELOADS = 8;
+
+/** 観測を打ち切るまでの猶予。短いと、抑止が壊れていても超過分を見逃す。 */
+const SETTLE_MS = 1_500;
+
 let harness: Harness;
 
 beforeAll(async () => {
@@ -63,9 +69,10 @@ describe('Master Playlist の解析', () => {
 			);
 
 			// 抑止が効いていなければ、この間に再フェッチが積み上がる
-			await new Promise((resolve) => setTimeout(resolve, 1_500));
+			await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 		} finally {
 			observed.stop();
+			await page.close();
 		}
 
 		// **上限だけを見ないこと。** `toBeLessThanOrEqual(2)` は、拡張機能の
@@ -82,6 +89,7 @@ describe('Master Playlist の解析', () => {
 		// シーケンス番号だけが違う URL は重複判定で 1 件へまとまる
 		const page = await harness.context.newPage();
 		const observed = collectManifestRequests(harness, 'hls/master.m3u8');
+		let stored: Awaited<ReturnType<typeof readStoredMedia>>;
 
 		try {
 			await page.goto(`${harness.server.origin}/media-hls-live.html`);
@@ -92,20 +100,26 @@ describe('Master Playlist の解析', () => {
 				{ label: 'ライブ HLS の解析', diagnose: () => snapshot(harness) },
 			);
 
-			// ページ側が 8 回投げ終わるまで待つ
+			// ページ側が投げ終わるまで待つ
 			await waitFor(
 				async () => observed.fromPage.length,
-				(count) => count >= 8,
+				(count) => count >= PAGE_RELOADS,
 				{ label: 'ページからの再読み込み' },
 			);
-			await new Promise((resolve) => setTimeout(resolve, 500));
+			// 待たずに打ち切ると、抑止が壊れていても超過分を観測できずに通る
+			await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+
+			stored = await readStoredMedia(harness, tabId);
 		} finally {
 			observed.stop();
+			await page.close();
 		}
 
 		// ページは何度も読み込むが、拡張機能の再フェッチは 1 回だけ
 		expect(observed.fromServiceWorker).toHaveLength(1);
-		expect(observed.fromPage.length).toBeGreaterThanOrEqual(8);
+		// シーケンス番号だけが違う URL が 1 件へまとまっていること。
+		// まとまっていなければ、抑止が効いていても件数は増える
+		expect(stored).toHaveLength(1);
 	});
 });
 
@@ -150,9 +164,15 @@ function collectManifestRequests(
 
 	const onRequest = (request: Request) => {
 		if (!request.url().includes(pathSubstring)) return;
-		// serviceWorker() は Chromium のみ。null ならフレーム由来
-		if (request.serviceWorker() === null) fromPage.push(request.url());
-		else fromServiceWorker.push(request.url());
+
+		// serviceWorker() は Chromium のみ。**「何らかの SW」では足りない。**
+		// フィクスチャが SW を登録すると、ページ由来の取得が混ざる
+		const worker = request.serviceWorker();
+		if (worker?.url().startsWith('chrome-extension://') === true) {
+			fromServiceWorker.push(request.url());
+		} else {
+			fromPage.push(request.url());
+		}
 	};
 
 	harness.context.on('request', onRequest);
