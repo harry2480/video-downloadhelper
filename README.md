@@ -87,6 +87,7 @@ apps/extension/src/
 | [docs/サービスコンセプト.md](docs/サービスコンセプト.md) | プロダクトのコンセプトと期待される効果 |
 | [docs/アーキテクチャ.md](docs/アーキテクチャ.md) | 2 層構造・依存ルール・Port/Adapter・命名規約 |
 | [docs/実装計画.md](docs/実装計画.md) | Phase 0〜3 の実装手順 |
+| [docs/残作業.md](docs/残作業.md) | 未着手・未解決の具体項目（着手前に確認） |
 | [docs/フロントエンドアーキテクチャ.md](docs/フロントエンドアーキテクチャ.md) | Popup UI 実装方針 |
 | [docs/フロントエンド規約.md](docs/フロントエンド規約.md) | components/hooks の責務分離・データフロー |
 | [docs/スタイルガイド.md](docs/スタイルガイド.md) | Tailwind 規約（寸法・カラー・折り返し） |
