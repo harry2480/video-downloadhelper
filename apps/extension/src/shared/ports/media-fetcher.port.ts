@@ -8,7 +8,8 @@
  * コアロジック層はこの interface だけを知る。実装は実行コンテキスト層が注入する。
  */
 
-export type FetchTextFailure =
+/** 取得できなかった理由。FetchTextResult からのみ参照する。 */
+type FetchTextFailure =
 	/** 通信に失敗した。オフライン、DNS、CORS 等 */
 	| { reason: 'network' }
 	/** 2xx 以外が返った。認証・有効期限切れの URL で起きる */

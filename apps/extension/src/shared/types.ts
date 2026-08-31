@@ -122,8 +122,8 @@ export type DownloadRequest = {
 	audioVariantId?: string;
 };
 
-/** ダウンロードの状態（要件定義 5.4）。 */
-export type DownloadStatus =
+/** ダウンロードの状態（要件定義 5.4）。DownloadTask からのみ参照する。 */
+type DownloadStatus =
 	/** 開始待ち */
 	| 'queued'
 	/** 取得中 */
