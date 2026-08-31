@@ -33,13 +33,13 @@ type DashDownloadRejection = { reason: string };
 
 type PlanOptions = {
 	/**
-	 * 保存する Representation を指す URL。
+	 * 保存する Representation の `id`。
 	 *
-	 * 初期化セグメント（無ければ先頭セグメント）の URL。
-	 * `media/dash/analysis.ts` が variant の `url` に載せたものと同じ値で、
-	 * **位置ではなく実体で選ぶ**ため、再解析で並びが変わっても取り違えない。
+	 * **位置でも URL でもなく、配信側が付けた識別子で選ぶ。** 位置は再解析で
+	 * 変わり、URL は署名付きなら取得のたびに変わる。`Representation@id` は
+	 * Period 内で一意と定められている（ISO/IEC 23009-1 5.3.5.2）。
 	 */
-	representationUrl?: string;
+	representationId?: string;
 
 	/**
 	 * プライベートネットワーク宛のセグメントを許すか。
@@ -48,11 +48,6 @@ type PlanOptions = {
 	 */
 	allowPrivateHosts?: boolean;
 };
-
-/** Representation を代表する URL。variant の `url` と同じ規則で決める。 */
-function representationUrlOf(representation: DashRepresentation): string | undefined {
-	return representation.initSegment?.uri ?? representation.segments[0]?.uri;
-}
 
 /** MPD から保存計画を組み立てる。 */
 export function planDashDownload(
@@ -73,12 +68,18 @@ export function planDashDownload(
 	if (primary === undefined) return err({ reason: NO_SEGMENTS });
 
 	const candidates = primary.representations;
-	const selected =
-		options.representationUrl === undefined
-			? candidates[0]
-			: candidates.find(
-					(representation) => representationUrlOf(representation) === options.representationUrl,
-				);
+	let selected: DashRepresentation | undefined;
+
+	if (options.representationId === undefined) {
+		selected = candidates[0];
+	} else {
+		// **一意に決まらなければ選ばない。** id が重複している（仕様違反の）
+		// MPD で先頭へ落とすと、意図しない画質で保存してしまう
+		const matched = candidates.filter(
+			(representation) => representation.id === options.representationId,
+		);
+		selected = matched.length === 1 ? matched[0] : undefined;
+	}
 
 	// 指定はあったが見つからない。既定へ落とすと意図しない画質で保存する
 	if (selected === undefined) return err({ reason: NO_MATCH });

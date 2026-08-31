@@ -145,11 +145,10 @@ describe('planDashDownload', () => {
 		});
 		const both = mpd({ adaptationSets: [videoSet({ representations: [hi, lo] })] });
 
-		it('指定した URL の Representation を選ぶ', () => {
-			// **位置ではなく実体で選ぶ。** 再解析で並びが変わっても取り違えない
-			const plan = planDashDownload(both, {
-				representationUrl: 'https://cdn.example.com/dash/lo-init.mp4',
-			});
+		it('指定した id の Representation を選ぶ', () => {
+			// **位置でも URL でもなく、配信側が付けた識別子で選ぶ。**
+			// 位置は再解析で変わり、URL は署名付きなら取得のたびに変わる
+			const plan = planDashDownload(both, { representationId: 'lo' });
 
 			expect(plan.ok).toBe(true);
 			if (!plan.ok) return;
@@ -169,16 +168,14 @@ describe('planDashDownload', () => {
 
 		it('指定した Representation が消えていたら既定へ落とさず失敗させる', () => {
 			// 既定へ落とすと、意図しない画質で保存してしまう
-			const rejected = planDashDownload(both, {
-				representationUrl: 'https://cdn.example.com/dash/gone-init.mp4',
-			});
+			const rejected = planDashDownload(both, { representationId: 'gone' });
 
 			expect(rejected.ok).toBe(false);
 			if (rejected.ok) return;
 			expect(rejected.error.reason).toContain('選択した画質');
 		});
 
-		it('初期化セグメントが無ければ先頭セグメントで選ぶ', () => {
+		it('初期化セグメントが無い Representation も選べる', () => {
 			const plain: DashRepresentation = {
 				id: 'p',
 				segments: [{ uri: 'https://cdn.example.com/p.mp4' }],
@@ -186,10 +183,34 @@ describe('planDashDownload', () => {
 
 			const plan = planDashDownload(
 				mpd({ adaptationSets: [videoSet({ representations: [plain] })] }),
-				{ representationUrl: 'https://cdn.example.com/p.mp4' },
+				{ representationId: 'p' },
 			);
 
 			expect(plan.ok).toBe(true);
+		});
+
+		it('id が重複していれば選ばない', () => {
+			// 仕様違反の MPD。先頭へ落とすと意図しない画質で保存してしまう
+			const rejected = planDashDownload(
+				mpd({
+					adaptationSets: [
+						videoSet({
+							representations: [
+								representation({ id: 'dup' }),
+								representation({
+									id: 'dup',
+									initSegment: { uri: 'https://cdn.example.com/other.mp4' },
+								}),
+							],
+						}),
+					],
+				}),
+				{ representationId: 'dup' },
+			);
+
+			expect(rejected.ok).toBe(false);
+			if (rejected.ok) return;
+			expect(rejected.error.reason).toContain('選択した画質');
 		});
 	});
 

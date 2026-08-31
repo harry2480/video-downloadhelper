@@ -136,6 +136,80 @@ describe('parseMpd', () => {
 			]);
 		});
 
+		it('継承は属性ごとに効く', () => {
+			// **丸ごと置き換えない。** 親が media/initialization を、子が
+			// duration だけを持つ MPD は珍しくない。置き換えるとセグメントが
+			// 1 本も作れなくなる
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<SegmentTemplate initialization="init-$RepresentationID$.mp4" media="$RepresentationID$-$Number$.m4s" startNumber="1" />
+	<Representation id="v0"><SegmentTemplate duration="5" /></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			const representation = parsed.adaptationSets[0]?.representations[0];
+			expect(representation?.initSegment?.uri).toBe('https://cdn.example.com/dash/init-v0.mp4');
+			expect(representation?.segments.map((segment) => segment.uri)).toEqual([
+				'https://cdn.example.com/dash/v0-1.m4s',
+				'https://cdn.example.com/dash/v0-2.m4s',
+				'https://cdn.example.com/dash/v0-3.m4s',
+				'https://cdn.example.com/dash/v0-4.m4s',
+			]);
+		});
+
+		it('子の属性が親を上書きする', () => {
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<SegmentTemplate media="parent-$Number$.m4s" duration="10" startNumber="1" />
+	<Representation id="v0"><SegmentTemplate media="child-$Number$.m4s" startNumber="7" /></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments[0]?.uri).toBe(
+				'https://cdn.example.com/dash/child-7.m4s',
+			);
+		});
+
+		it('子が SegmentTimeline を持てば親のものを使わない', () => {
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<SegmentTemplate media="$Time$.m4s">
+		<SegmentTimeline><S t="0" d="10" r="9" /></SegmentTimeline>
+	</SegmentTemplate>
+	<Representation id="v0">
+		<SegmentTemplate><SegmentTimeline><S t="0" d="10" /></SegmentTimeline></SegmentTemplate>
+	</Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments).toHaveLength(1);
+		});
+
+		it('子が SegmentTimeline を持たなければ親のものを使う', () => {
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<SegmentTemplate media="$Time$.m4s">
+		<SegmentTimeline><S t="0" d="10" r="2" /></SegmentTimeline>
+	</SegmentTemplate>
+	<Representation id="v0"><SegmentTemplate startNumber="1" /></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments).toHaveLength(3);
+		});
+
 		it('AdaptationSet の SegmentList / SegmentBase も引き継ぐ', () => {
 			const withList = unwrap(
 				parseMpd(

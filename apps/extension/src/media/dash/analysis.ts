@@ -67,6 +67,7 @@ function toVariant(
 
 	return {
 		id: `v${index}`,
+		...(representation.id !== '' && { sourceId: representation.id }),
 		// **セグメントではなく Representation の id を URL 代わりに持たない。**
 		// 保存対象は「初期化セグメント + セグメントの並び」であり、単一の URL では
 		// 表せない。ここでは先頭セグメントの URL を代表として持ち、実際の取得は

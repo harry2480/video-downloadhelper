@@ -302,6 +302,27 @@ function fromSegmentBase(base: string): SegmentSource {
 	return { segments: [{ uri: base }] };
 }
 
+/**
+ * 親子のセグメント指定を重ねる。子の属性が勝つ。
+ *
+ * 子要素（SegmentTimeline / SegmentURL 等）は、子が 1 つでも持っていれば
+ * 子のものを使う。持っていなければ親から引き継ぐ。
+ */
+function mergeSegmentElements(
+	parent: XmlElement | undefined,
+	child: XmlElement | undefined,
+): XmlElement | undefined {
+	if (parent === undefined) return child;
+	if (child === undefined) return parent;
+
+	return {
+		name: child.name,
+		attributes: { ...parent.attributes, ...child.attributes },
+		children: child.children.length > 0 ? child.children : parent.children,
+		text: child.text,
+	};
+}
+
 function parseRepresentation(
 	element: XmlElement,
 	parentBase: string,
@@ -314,9 +335,15 @@ function parseRepresentation(
 	const id = element.attributes.id ?? '';
 	const bandwidth = parseNumber(element.attributes.bandwidth);
 
-	const template = childNamed(element, 'SegmentTemplate') ?? inherited.template;
-	const list = childNamed(element, 'SegmentList') ?? inherited.list;
-	const segmentBase = childNamed(element, 'SegmentBase') ?? inherited.segmentBase;
+	// **継承は属性ごとに効く（ISO/IEC 23009-1 5.3.9.2）。** 丸ごと置き換えると、
+	// 親が media/initialization を、子が duration だけを持つ一般的な MPD で
+	// セグメントが 1 本も作れなくなる
+	const template = mergeSegmentElements(inherited.template, childNamed(element, 'SegmentTemplate'));
+	const list = mergeSegmentElements(inherited.list, childNamed(element, 'SegmentList'));
+	const segmentBase = mergeSegmentElements(
+		inherited.segmentBase,
+		childNamed(element, 'SegmentBase'),
+	);
 
 	let source: SegmentSource;
 	if (template !== undefined) {

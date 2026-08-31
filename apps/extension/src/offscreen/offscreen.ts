@@ -137,8 +137,8 @@ function buildPlan(
 
 		const plan = planDashDownload(parsed.value, {
 			allowPrivateHosts,
-			...(command.representationUrl !== undefined && {
-				representationUrl: command.representationUrl,
+			...(command.representationId !== undefined && {
+				representationId: command.representationId,
 			}),
 		});
 		return plan.ok ? { ok: true, value: plan.value } : { ok: false, reason: plan.error.reason };

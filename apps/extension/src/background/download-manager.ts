@@ -378,7 +378,8 @@ export class DownloadManager {
 				// 初期化セグメントを指すため、マニフェストとしては使えない
 				manifestUrl: media.type === 'dash' ? media.sourceUrl : url,
 				format: media.type,
-				...(media.type === 'dash' && variant !== undefined && { representationUrl: variant.url }),
+				...(media.type === 'dash' &&
+					variant?.sourceId !== undefined && { representationId: variant.sourceId }),
 				maxBytes: MAX_TOTAL_BYTES,
 				// ページが差し替えられない値で判断する。公開ページから
 				// LAN やループバックを叩かせないため

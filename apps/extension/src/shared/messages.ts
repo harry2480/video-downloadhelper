@@ -58,8 +58,8 @@ export type BackgroundToOffscreen =
 			/** HLS の Media Playlist、または DASH の MPD の絶対 URL */
 			manifestUrl: string;
 			format: 'hls' | 'dash';
-			/** DASH で保存する Representation を指す URL */
-			representationUrl?: string;
+			/** DASH で保存する Representation の id */
+			representationId?: string;
 			/** 合計サイズの上限（バイト） */
 			maxBytes: number;
 			/**
@@ -280,10 +280,10 @@ export function parseAssemblyCommand(raw: unknown): BackgroundToOffscreen | unde
 
 		// **指定があるのに読めない値なら受け取らない。** 未指定として扱うと
 		// 既定の Representation で保存してしまう
-		let representationUrl: string | undefined;
-		if (raw.representationUrl !== undefined) {
-			representationUrl = parseId(raw.representationUrl);
-			if (representationUrl === undefined || !isHttpUrl(representationUrl)) return undefined;
+		let representationId: string | undefined;
+		if (raw.representationId !== undefined) {
+			representationId = parseId(raw.representationId);
+			if (representationId === undefined) return undefined;
 		}
 
 		return {
@@ -291,7 +291,7 @@ export function parseAssemblyCommand(raw: unknown): BackgroundToOffscreen | unde
 			taskId,
 			manifestUrl,
 			format: raw.format,
-			...(representationUrl !== undefined && { representationUrl }),
+			...(representationId !== undefined && { representationId }),
 			maxBytes,
 			allowPrivateHosts: raw.allowPrivateHosts === true,
 		};

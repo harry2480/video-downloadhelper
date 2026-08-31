@@ -86,7 +86,7 @@ export function createOffscreenHost(): AssemblerPort {
 				taskId: job.taskId,
 				manifestUrl: job.manifestUrl,
 				format: job.format,
-				...(job.representationUrl !== undefined && { representationUrl: job.representationUrl }),
+				...(job.representationId !== undefined && { representationId: job.representationId }),
 				maxBytes: job.maxBytes,
 				allowPrivateHosts: job.allowPrivateHosts,
 			});

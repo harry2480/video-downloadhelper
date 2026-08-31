@@ -344,7 +344,7 @@ describe('parseAssemblyCommand', () => {
 				taskId: 't1',
 				manifestUrl: 'https://cdn.example.com/manifest.mpd',
 				format: 'dash',
-				representationUrl: 'https://cdn.example.com/init-v0.mp4',
+				representationId: 'hi',
 				maxBytes: 100,
 			}),
 		).toEqual({
@@ -352,7 +352,7 @@ describe('parseAssemblyCommand', () => {
 			taskId: 't1',
 			manifestUrl: 'https://cdn.example.com/manifest.mpd',
 			format: 'dash',
-			representationUrl: 'https://cdn.example.com/init-v0.mp4',
+			representationId: 'hi',
 			maxBytes: 100,
 			allowPrivateHosts: false,
 		});
@@ -372,14 +372,14 @@ describe('parseAssemblyCommand', () => {
 
 	it('Representation の指定が壊れていれば要求ごと捨てる', () => {
 		// 未指定として扱うと、既定の Representation で保存してしまう
-		for (const representationUrl of ['file:///etc/passwd', 42, '']) {
+		for (const representationId of [42, '', 'x'.repeat(4_097)]) {
 			expect(
 				parseAssemblyCommand({
 					kind: 'assemble',
 					taskId: 't1',
 					manifestUrl: 'https://cdn.example.com/manifest.mpd',
 					format: 'dash',
-					representationUrl,
+					representationId,
 					maxBytes: 100,
 				}),
 			).toBeUndefined();
