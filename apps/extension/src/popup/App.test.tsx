@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BackgroundToPopup } from '../shared/messages';
@@ -208,6 +208,131 @@ describe('品質選択', () => {
 		await user.keyboard('{ArrowDown}');
 
 		expect(options[1]).toBeChecked();
+	});
+
+	it('再解析で品質が入れ替わっても、選んだ画質を指し続ける', async () => {
+		// **variant の id は解析時の並び順で振る位置ベースの値。**
+		// 再解析で本数が変わると同じ id が別の画質を指す。id を覚えていると
+		// 「720p を選んだのに 1080p で保存する」が気づかないまま起きる
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [hlsMedia], blocked: false });
+
+		const [, second] = await screen.findAllByRole('radio');
+		await user.click(second as HTMLElement);
+
+		// 1080p が消え、720p の id が v1 → v0 へずれる
+		port.emit({
+			kind: 'media-list',
+			media: [
+				{
+					...hlsMedia,
+					variants: [
+						{
+							id: 'v0',
+							url: 'https://cdn.example.com/720.m3u8',
+							height: 720,
+							bandwidth: 2_500_000,
+						},
+						{
+							id: 'v1',
+							url: 'https://cdn.example.com/480.m3u8',
+							height: 480,
+							bandwidth: 1_000_000,
+						},
+					],
+				},
+			],
+			blocked: false,
+		});
+
+		// 再描画を待つ。findAllByRole は先に見つかった古い一覧を返してしまう
+		await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(2));
+		const after = screen.getAllByRole('radio');
+		// 選択は 720p のまま。位置ではなく画質そのものに追随する
+		expect(after[0]).toBeChecked();
+
+		await user.click(screen.getByRole('button', { name: '保存' }));
+		expect(port.sent).toContainEqual({
+			kind: 'start-download',
+			request: { mediaId: hlsMedia.id, variantId: 'v0' },
+		});
+	});
+
+	it('選んだ画質が消えたら最高品質へ戻し、保存できる状態を保つ', async () => {
+		// どれにも一致しない id を保持し続けると、ラジオが未選択になり
+		// DownloadControl が variant を解決できず保存ボタンごと消える
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [hlsMedia], blocked: false });
+
+		const [, , third] = await screen.findAllByRole('radio');
+		await user.click(third as HTMLElement);
+
+		port.emit({
+			kind: 'media-list',
+			media: [
+				{
+					...hlsMedia,
+					variants: [
+						{
+							id: 'v0',
+							url: 'https://cdn.example.com/1080.m3u8',
+							height: 1080,
+							bandwidth: 5_200_000,
+						},
+						{
+							id: 'v1',
+							url: 'https://cdn.example.com/720.m3u8',
+							height: 720,
+							bandwidth: 2_500_000,
+						},
+					],
+				},
+			],
+			blocked: false,
+		});
+
+		// 再描画を待つ。findAllByRole は先に見つかった古い一覧を返してしまう
+		await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(2));
+		const after = screen.getAllByRole('radio');
+		expect(after[0]).toBeChecked();
+		expect(after.some((option) => (option as HTMLInputElement).checked)).toBe(true);
+
+		await user.click(screen.getByRole('button', { name: '保存' }));
+		expect(port.sent).toContainEqual({
+			kind: 'start-download',
+			request: { mediaId: hlsMedia.id, variantId: 'v0' },
+		});
+	});
+
+	it('推定サイズが後から付いても選択を保つ', async () => {
+		// 再生時間が分かった時点で estimatedSize が加わる。ここで選択が
+		// 既定へ戻ると、解析の進行に合わせて選び直しを強いられる
+		const user = userEvent.setup();
+		const port = renderApp();
+		port.emit({ kind: 'media-list', media: [hlsMedia], blocked: false });
+
+		const [, second] = await screen.findAllByRole('radio');
+		await user.click(second as HTMLElement);
+
+		act(() => {
+			port.emit({
+				kind: 'media-list',
+				media: [
+					{
+						...hlsMedia,
+						variants: hlsMedia.variants?.map((variant) => ({
+							...variant,
+							estimatedSize: 100_000_000,
+						})),
+					},
+				],
+				blocked: false,
+			});
+		});
+
+		expect(screen.getAllByRole('radio')[1]).toBeChecked();
 	});
 
 	it('品質が 1 つしかなければ選択 UI を出さない', async () => {

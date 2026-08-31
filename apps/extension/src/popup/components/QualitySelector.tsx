@@ -25,7 +25,8 @@ export function QualitySelector({
 }: {
 	variants: MediaVariant[];
 	selectedId: string;
-	onSelect: (id: string) => void;
+	/** 選ばれた variant を丸ごと返す。id は再解析で振り直されるため上位で覚えない */
+	onSelect: (variant: MediaVariant) => void;
 }) {
 	const groupName = useId();
 
@@ -44,7 +45,7 @@ export function QualitySelector({
 						name={groupName}
 						value={variant.id}
 						checked={variant.id === selectedId}
-						onChange={() => onSelect(variant.id)}
+						onChange={() => onSelect(variant)}
 					/>
 					<span>{variantLabel(variant)}</span>
 				</label>
