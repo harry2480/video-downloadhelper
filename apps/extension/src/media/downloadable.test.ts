@@ -70,9 +70,24 @@ describe('downloadRejectionReason', () => {
 		expect(downloadRejectionReason(media({ type: 'hls' }))).toContain('画質を確認');
 	});
 
-	it('DASH はまだ保存できない', () => {
-		// 映像と音声の結合が要るため Phase 2
-		expect(downloadRejectionReason(media({ type: 'dash' }))).toContain('まだ');
+	it('解析前の DASH は保存操作を出さない', () => {
+		// MPD を読む前に始めると、MPD 自体を組み立てへ渡すことになる
+		expect(downloadRejectionReason(media({ type: 'dash' }))).toContain('画質');
+	});
+
+	it('保存できない形式には理由を出す', () => {
+		expect(downloadRejectionReason(media({ type: 'unknown' }))).toContain('まだ');
+	});
+
+	it('解析前の HLS も保存操作を出さない', () => {
+		expect(downloadRejectionReason(media({ type: 'hls' }))).toContain('画質');
+	});
+
+	it('解析済みの DASH は保存できる', () => {
+		// 映像と音声が分かれている場合は保存計画の側で理由を出す
+		expect(
+			downloadRejectionReason(media({ type: 'dash', manifestResolved: true })),
+		).toBeUndefined();
 	});
 
 	it('保存できない URL を弾く', () => {
@@ -90,15 +105,16 @@ describe('downloadRejectionReason', () => {
 
 describe('isPendingSupport', () => {
 	it('未対応の形式だけを準備中として扱う', () => {
-		expect(isPendingSupport(media({ type: 'dash' }))).toBe(true);
+		expect(isPendingSupport(media({ type: 'unknown' }))).toBe(true);
 		expect(isPendingSupport(media())).toBe(false);
 		expect(isPendingSupport(media({ type: 'hls', manifestResolved: true }))).toBe(false);
+		expect(isPendingSupport(media({ type: 'dash', manifestResolved: true }))).toBe(false);
 	});
 
 	it('DRM や取得失敗は準備中に含めない', () => {
 		// 「準備中」と出すと、待てば対応されるかのように読める
-		expect(isPendingSupport(media({ type: 'dash', drm: true }))).toBe(false);
-		expect(isPendingSupport(media({ type: 'dash', unsupportedReason: '取得できません' }))).toBe(
+		expect(isPendingSupport(media({ type: 'unknown', drm: true }))).toBe(false);
+		expect(isPendingSupport(media({ type: 'unknown', unsupportedReason: '取得できません' }))).toBe(
 			false,
 		);
 	});

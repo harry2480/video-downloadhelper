@@ -244,7 +244,8 @@ describe('start', () => {
 		expect(harness.jobs).toEqual([
 			{
 				taskId: 'task-1',
-				playlistUrl: HLS_URL,
+				manifestUrl: HLS_URL,
+				format: 'hls',
 				maxBytes: 2 * 1024 * 1024 * 1024,
 				allowPrivateHosts: false,
 			},
@@ -285,7 +286,7 @@ describe('start', () => {
 
 		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v1' });
 
-		expect(harness.jobs[0]?.playlistUrl).toBe('https://cdn.example.com/720/index.m3u8');
+		expect(harness.jobs[0]?.manifestUrl).toBe('https://cdn.example.com/720/index.m3u8');
 	});
 
 	it('推定サイズが上限を超えるなら取りかからない', async () => {

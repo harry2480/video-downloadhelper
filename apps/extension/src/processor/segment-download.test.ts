@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DecryptorPort } from '../shared/ports/decryptor.port';
 import type { SegmentFetchOptions, SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
 import { err, ok } from '../shared/utils';
-import type { PlannedSegment } from './hls-download';
+import type { PlannedSegment } from './download-plan';
 import { downloadSegments, totalByteLength } from './segment-download';
 
 /**

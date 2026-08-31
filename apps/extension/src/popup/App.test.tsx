@@ -415,13 +415,24 @@ describe('ダウンロード', () => {
 		expect(await screen.findByRole('button', { name: '保存' })).toBeInTheDocument();
 	});
 
-	it('DASH には保存ボタンを出さない', async () => {
+	it('形式が分からないものには保存ボタンを出さない', async () => {
 		// 押せるのに保存できない状態を作らない
 		const port = renderApp();
-		port.emit({ kind: 'media-list', media: [media({ type: 'dash' })], blocked: false });
+		port.emit({ kind: 'media-list', media: [media({ type: 'unknown' })], blocked: false });
 
 		expect(await screen.findByText(/準備中/)).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument();
+	});
+
+	it('解析済みの DASH には保存ボタンを出す', async () => {
+		const port = renderApp();
+		port.emit({
+			kind: 'media-list',
+			media: [media({ type: 'dash', manifestResolved: true })],
+			blocked: false,
+		});
+
+		expect(await screen.findByRole('button', { name: '保存' })).toBeInTheDocument();
 	});
 
 	it('セグメントの取得中は進捗を出す', async () => {

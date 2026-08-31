@@ -12,10 +12,16 @@ import { isFetchableUrl } from './media-type';
 /**
  * 保存できる形式。
  *
- * HLS はセグメントを取得して連結する（Offscreen Document 側）。
- * DASH は映像・音声の結合が要るため Phase 2。
+ * HLS / DASH はセグメントを取得して連結する（Offscreen Document 側）。
+ * DASH で映像と音声が分かれている場合は結合が要るため、保存計画
+ * （`processor/dash-download.ts`）の側で理由を出して弾く。
  */
-const DOWNLOADABLE_TYPES: ReadonlySet<MediaType> = new Set<MediaType>(['direct', 'audio', 'hls']);
+const DOWNLOADABLE_TYPES: ReadonlySet<MediaType> = new Set<MediaType>([
+	'direct',
+	'audio',
+	'hls',
+	'dash',
+]);
 
 const DRM_REJECTED = 'DRM で保護されているため保存できません';
 const NOT_DOWNLOADABLE = 'この形式の保存はまだできません';
@@ -49,9 +55,11 @@ export function downloadRejectionReason(
 	if (media.unsupportedReason !== undefined) return media.unsupportedReason;
 	if (!DOWNLOADABLE_TYPES.has(media.type)) return NOT_DOWNLOADABLE;
 
-	// 解析前の HLS で保存を始めると、Master Playlist を組み立てに渡すことになり
+	// 解析前に保存を始めると、マニフェストそのものを組み立てに渡すことになり
 	// 必ず失敗する。画質が確定するまでは操作を出さない
-	if (media.type === 'hls' && media.manifestResolved !== true) return ANALYZING;
+	if ((media.type === 'hls' || media.type === 'dash') && media.manifestResolved !== true) {
+		return ANALYZING;
+	}
 
 	if (resolveDownloadUrl(media, variant) === undefined) return UNSAFE_URL;
 	return undefined;
