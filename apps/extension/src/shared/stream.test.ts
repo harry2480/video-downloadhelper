@@ -75,6 +75,29 @@ describe('readBytesWithinLimit', () => {
 	});
 });
 
+describe('上限超過時の打ち切り', () => {
+	/** cancel が失敗するストリーム。既に壊れている応答を模す。 */
+	function failingCancelStream(): ReadableStream<Uint8Array> {
+		return new ReadableStream({
+			pull(controller) {
+				controller.enqueue(new Uint8Array(1024).fill(0x41));
+			},
+			cancel() {
+				throw new Error('cancel failed');
+			},
+		});
+	}
+
+	it('readTextWithinLimit は cancel の失敗を伝えない', async () => {
+		// 伝えると呼び出し側の catch に落ち、too-large が network にすり替わる
+		await expect(readTextWithinLimit(failingCancelStream(), 512)).resolves.toEqual({ ok: false });
+	});
+
+	it('readBytesWithinLimit は cancel の失敗を伝えない', async () => {
+		await expect(readBytesWithinLimit(failingCancelStream(), 512)).resolves.toEqual({ ok: false });
+	});
+});
+
 describe('discardBody', () => {
 	it('本文を cancel する', async () => {
 		let cancelled = false;

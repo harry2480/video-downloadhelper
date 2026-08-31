@@ -135,6 +135,11 @@ describe('対応外の判定', () => {
  * リクエストは `page.on('request')` には現れない。拡張機能の再フェッチは
  * Service Worker から出るため、Page 単位で監視すると 1 件も観測できず、
  * 「繰り返していない」という検証が素通りする。
+ *
+ * **前提: 再フェッチは Service Worker からのみ出る。** Content Script は
+ * ページのフレームで動くため `serviceWorker()` は null を返し、
+ * `fromPage` に数えられる。取得の主体を Content Script へ移すなら、
+ * この分類も見直すこと（そうしないと退行を見逃す）。
  */
 function collectManifestRequests(
 	harness: Harness,

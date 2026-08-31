@@ -20,8 +20,19 @@
  * 飛び、`http-error` が `network` にすり替わる。
  */
 export async function discardBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+	if (body === null) return;
+	await cancelQuietly(() => body.cancel());
+}
+
+/**
+ * cancel の失敗を呼び出し側へ伝えない。
+ *
+ * 読み取り中のストリームは、reader がロックを持っているため
+ * `body.cancel()` を呼べない。呼び分けはここに閉じる。
+ */
+async function cancelQuietly(cancel: () => Promise<unknown>): Promise<void> {
 	try {
-		await body?.cancel();
+		await cancel();
 	} catch {
 		// 既に壊れているストリーム。捨てるという目的は果たされている
 	}
@@ -51,7 +62,8 @@ export async function readTextWithinLimit(
 		const value = result.value;
 		total += value.byteLength;
 		if (total > maxBytes) {
-			await reader.cancel();
+			// ここで例外を伝えると too-large が network にすり替わる
+			await cancelQuietly(() => reader.cancel());
 			return { ok: false };
 		}
 		chunks.push(value);
@@ -92,7 +104,8 @@ export async function readBytesWithinLimit(
 		const value = result.value;
 		total += value.byteLength;
 		if (total > maxBytes) {
-			await reader.cancel();
+			// ここで例外を伝えると too-large が network にすり替わる
+			await cancelQuietly(() => reader.cancel());
 			return { ok: false };
 		}
 		chunks.push(value);
