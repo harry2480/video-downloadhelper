@@ -156,6 +156,45 @@ describe('HLS の保存', () => {
 		}
 	}, 90_000);
 
+	it('要求と違う範囲が返ってきたら保存しない', async () => {
+		// **206 は「要求した範囲」を保証しない。** 同じ長さの別範囲を返す
+		// サーバーでは長さの検証も通り、中身がずれたまま連結される
+		const contentPage = await harness.context.newPage();
+		const popup = await harness.context.newPage();
+
+		try {
+			await contentPage.goto(`${harness.server.origin}/media-hls-ranged-shifted.html`);
+			const tabId = await resolveTabId(harness, 'media-hls-ranged-shifted.html');
+
+			await popup.goto(popupUrl(harness.extensionId));
+			await contentPage.bringToFront();
+			await popup.reload();
+
+			await waitFor(
+				() => readStoredMedia(harness, tabId),
+				(media) => media?.[0]?.manifestResolved === true,
+				{ timeoutMs: 20_000, label: '解析', diagnose: () => snapshot(harness) },
+			);
+
+			await expect
+				.poll(() => popup.getByRole('button', { name: '保存' }).count(), { timeout: 20_000 })
+				.toBe(1);
+
+			await popup.getByRole('button', { name: '保存' }).click();
+
+			const failed = await waitFor(
+				async () => (await readStoredTasks(harness))?.find((task) => task.tabId === tabId),
+				(task) => task?.status === 'failed',
+				{ timeoutMs: 30_000, label: '範囲不一致の失敗', diagnose: () => snapshot(harness) },
+			);
+
+			expect(failed?.error).toContain('バイトレンジ');
+		} finally {
+			await popup.close();
+			await contentPage.close();
+		}
+	}, 90_000);
+
 	it('AES-128 で暗号化されたセグメントを復号して保存する', async () => {
 		// 復号せずに保存すると、暗号文のまま「保存できた」ことになる
 		const saved = await downloadFrom('media-hls-aes.html');

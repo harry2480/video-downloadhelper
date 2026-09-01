@@ -500,6 +500,7 @@ describe('planHlsDownload', () => {
 		it('初期化セグメントにも鍵を適用する', () => {
 			// RFC 8216 は #EXT-X-MAP にも直前の #EXT-X-KEY を適用する。
 			// 平文として扱うと、結合したファイルの先頭だけが壊れる
+			const iv = '0x0000000000000000000000000000000a';
 			const plan = planHlsDownload(
 				playlist({
 					encryption: { method: 'aes-128' },
@@ -508,7 +509,10 @@ describe('planHlsDownload', () => {
 						segment({
 							key: { keyUri: KEY_URL },
 							sequenceNumber: 3,
-							initSegment: { uri: 'https://cdn.example.com/init.mp4', key: { keyUri: KEY_URL } },
+							initSegment: {
+								uri: 'https://cdn.example.com/init.mp4',
+								key: { keyUri: KEY_URL, iv },
+							},
 						}),
 					],
 				}),
@@ -518,8 +522,43 @@ describe('planHlsDownload', () => {
 			if (!plan.ok) return;
 			expect(plan.value.segments[0]?.decryption).toEqual({
 				keyUrl: KEY_URL,
-				iv: ivFromSequenceNumber(3),
+				iv: ivFromSequenceNumber(10),
 			});
+		});
+
+		it('暗号化された初期化セグメントに IV が無ければ保存しない', () => {
+			// **番号からの導出は規定されていない**（RFC 8216 4.3.2.5 は
+			// 暗号化された #EXT-X-MAP に IV を必須としている）。実際の IV と
+			// 違えば AES-CBC の先頭ブロックだけが壊れ、ftyp を含む先頭が
+			// 壊れた mp4 になる。保存は成功したように見えるので、より悪い
+			const rejected = planHlsDownload(
+				playlist({
+					encryption: { method: 'aes-128' },
+					segments: [
+						segment({
+							key: { keyUri: KEY_URL, iv: '0x00000000000000000000000000000001' },
+							initSegment: {
+								uri: 'https://cdn.example.com/init.mp4',
+								key: { keyUri: KEY_URL },
+							},
+						}),
+					],
+				}),
+			);
+
+			expect(rejected.ok).toBe(false);
+			if (rejected.ok) return;
+			expect(rejected.error.reason).toContain('IV');
+		});
+
+		it('平文の初期化セグメントには IV を求めない', () => {
+			const plan = planHlsDownload(
+				playlist({
+					segments: [segment({ initSegment: { uri: 'https://cdn.example.com/init.mp4' } })],
+				}),
+			);
+
+			expect(plan.ok).toBe(true);
 		});
 	});
 });
