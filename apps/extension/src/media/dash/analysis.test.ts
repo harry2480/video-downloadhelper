@@ -277,6 +277,24 @@ describe('analyzeMpd', () => {
 			expect(analysis.variants?.[0]?.sourceId).toBe('ok');
 		});
 
+		it('id が重複しているものは出さない', () => {
+			// 保存側は「一意に決まらない」として必ず失敗する。
+			// 一覧へ出すと、どちらを選んでも保存できない
+			const analysis = unwrap(
+				analyzeMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<Representation id="dup" width="1920" height="1080"><BaseURL>a.mp4</BaseURL></Representation>
+	<Representation id="dup" width="1280" height="720"><BaseURL>b.mp4</BaseURL></Representation>
+	<Representation id="ok" width="640" height="360"><BaseURL>c.mp4</BaseURL></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(analysis.variants).toHaveLength(1);
+			expect(analysis.variants?.[0]?.sourceId).toBe('ok');
+		});
+
 		it('id が長すぎるものは出さない', () => {
 			// メッセージの上限を超えると要求ごと捨てられ、保存が始まらないまま
 			// 「取得中」で止まる

@@ -659,6 +659,50 @@ describe('parseMpd', () => {
 			]);
 		});
 
+		it('BaseURL が無い SegmentBase はセグメントを持たない', () => {
+			// **マニフェスト自身の URL を 1 本のメディアにしない。**
+			// MPD の XML を .mp4 として保存する経路になる
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<Representation id="v0"><SegmentBase indexRange="0-999" /></Representation>
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments).toEqual([]);
+		});
+
+		it('継承した SegmentBase でも BaseURL が無ければセグメントを持たない', () => {
+			const parsed = unwrap(
+				parseMpd(
+					mpd(`<AdaptationSet contentType="video">
+	<SegmentBase indexRange="0-999" />
+	<Representation id="v0" />
+</AdaptationSet>`),
+					BASE,
+				),
+			);
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments).toEqual([]);
+		});
+
+		it('上位の BaseURL でも 1 本として扱える', () => {
+			// Representation 直下でなくても、どこかで宣言されていればよい
+			const content = `<MPD type="static" mediaPresentationDuration="PT20S">
+	<BaseURL>https://cdn.example.com/whole.mp4</BaseURL>
+	<Period><AdaptationSet contentType="video">
+		<Representation id="v0"><SegmentBase indexRange="0-999" /></Representation>
+	</AdaptationSet></Period>
+</MPD>`;
+			const parsed = unwrap(parseMpd(content, BASE));
+
+			expect(parsed.adaptationSets[0]?.representations[0]?.segments).toEqual([
+				{ uri: 'https://cdn.example.com/whole.mp4' },
+			]);
+		});
+
 		it('セグメント指定が無ければ BaseURL 自体を 1 本として扱う', () => {
 			const parsed = unwrap(
 				parseMpd(
