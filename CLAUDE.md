@@ -110,3 +110,4 @@ build を含めるのは manifest 由来のエラー（エントリ記述漏れ�
 - docs/品質チェック・テスト規約.md — verify・dependency-cruiser ルール
 - docs/テストガイドライン.md — テスト種別ごとの方針
 - docs/実装計画.md — Phase 0〜3 の実装手順
+- docs/残作業.md — 未着手・未解決の具体項目。**新しい作業に着手する前に読むこと**
