@@ -7,6 +7,7 @@ import {
 	formatUnsupportedReason,
 	formatUrlForDisplay,
 } from '../../media/format';
+import { resolveSelectedVariant, variantKey } from '../../media/variant-selection';
 import type { DetectedMedia, DownloadRequest, DownloadTask } from '../../shared/types';
 import { DownloadControl } from './DownloadControl';
 import { QualitySelector } from './QualitySelector';
@@ -32,9 +33,11 @@ export function MediaItem({ media, task, onDownload, onCancel, onRetry }: Props)
 	const detailId = useId();
 
 	const variants = media.variants ?? [];
-	// 既定で最高品質を選ぶ。variants は解析時に高画質順へ並べてある
-	const [selectedVariantId, setSelectedVariantId] = useState<string | undefined>(undefined);
-	const effectiveVariantId = selectedVariantId ?? variants[0]?.id;
+	// **id ではなく品質そのものを覚える。** id は再解析で振り直され、
+	// 別の品質を指しうる（media/variant-selection.ts）。
+	// 未選択なら既定で最高品質。variants は解析時に高画質順へ並べてある
+	const [selectedKey, setSelectedKey] = useState<string | undefined>(undefined);
+	const selectedVariant = resolveSelectedVariant(variants, selectedKey);
 
 	const title = formatTitle(media);
 	const host = formatHost(media.sourceUrl);
@@ -64,18 +67,18 @@ export function MediaItem({ media, task, onDownload, onCancel, onRetry }: Props)
 						<p className="text-muted text-xs">画質を確認しています…</p>
 					)}
 
-				{variants.length > 1 && effectiveVariantId !== undefined && (
+				{variants.length > 1 && selectedVariant !== undefined && (
 					<QualitySelector
 						variants={variants}
-						selectedId={effectiveVariantId}
-						onSelect={setSelectedVariantId}
+						selectedId={selectedVariant.id}
+						onSelect={(variant) => setSelectedKey(variantKey(variant))}
 					/>
 				)}
 
 				<div className="mt-1">
 					<DownloadControl
 						media={media}
-						variantId={effectiveVariantId}
+						variant={selectedVariant}
 						task={task}
 						onDownload={onDownload}
 						onCancel={onCancel}

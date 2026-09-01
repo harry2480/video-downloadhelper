@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { formatBitrate, formatBytes, formatResolution } from '../../media/format';
+import { variantKey } from '../../media/variant-selection';
 import type { MediaVariant } from '../../shared/types';
 
 /**
@@ -25,7 +26,8 @@ export function QualitySelector({
 }: {
 	variants: MediaVariant[];
 	selectedId: string;
-	onSelect: (id: string) => void;
+	/** 選ばれた variant を丸ごと返す。id は再解析で振り直されるため上位で覚えない */
+	onSelect: (variant: MediaVariant) => void;
 }) {
 	const groupName = useId();
 
@@ -34,7 +36,10 @@ export function QualitySelector({
 			<legend className="mb-1 text-muted text-xs">画質を選択</legend>
 			{variants.map((variant) => (
 				<label
-					key={variant.id}
+					// **id を identity に使わない。** 再解析で並びが変わると、
+					// 同じ DOM ノードが別の品質へ付け替わり、フォーカス中の
+					// 選択肢が無言で入れ替わる
+					key={variantKey(variant)}
 					className="flex cursor-pointer items-center gap-2 text-xs"
 					htmlFor={`${groupName}-${variant.id}`}
 				>
@@ -44,7 +49,7 @@ export function QualitySelector({
 						name={groupName}
 						value={variant.id}
 						checked={variant.id === selectedId}
-						onChange={() => onSelect(variant.id)}
+						onChange={() => onSelect(variant)}
 					/>
 					<span>{variantLabel(variant)}</span>
 				</label>

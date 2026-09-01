@@ -1,5 +1,5 @@
 import type { FetchByteRange, SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
-import { readBytesWithinLimit, readTextWithinLimit } from '../shared/stream';
+import { discardBody, readBytesWithinLimit, readTextWithinLimit } from '../shared/stream';
 import { err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
 
 /**
@@ -78,7 +78,7 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 
 		// リダイレクトで方針の外へ出ていたら、本文を読まずに捨てる
 		if (response.url !== '' && !isAllowed(response.url)) {
-			await response.body?.cancel();
+			await discardBody(response.body);
 			return undefined;
 		}
 
@@ -101,7 +101,7 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 
 				if (!response.ok) {
 					// ボディを捨てて接続を解放する。読まないまま放置しない
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return err({ reason: 'http-error', status: response.status });
 				}
 
@@ -109,14 +109,14 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 				// 全体が返っている可能性が高い。気づかずに連結すると、
 				// 同じ内容を繰り返した壊れたファイルになる
 				if (range !== undefined && response.status !== 206) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return err({ reason: 'range-not-satisfied' });
 				}
 
 				// **206 は「要求した範囲」を保証しない。** 同じ長さの別範囲を
 				// 返すサーバーでは長さの検証も通り、中身がずれたまま連結される
 				if (range !== undefined && !matchesRequestedRange(response, range)) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return err({ reason: 'range-not-satisfied' });
 				}
 
@@ -129,7 +129,7 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 
 				const declared = Number(response.headers.get('content-length'));
 				if (Number.isFinite(declared) && declared > limit) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return err({ reason: 'too-large' });
 				}
 
@@ -158,13 +158,13 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 				if (response === undefined) return { ok: false };
 
 				if (!response.ok) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return { ok: false };
 				}
 
 				const declared = Number(response.headers.get('content-length'));
 				if (Number.isFinite(declared) && declared > MAX_MANIFEST_BYTES) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return { ok: false };
 				}
 

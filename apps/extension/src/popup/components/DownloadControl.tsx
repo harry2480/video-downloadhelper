@@ -1,6 +1,12 @@
 import { isDownloadable, isPendingSupport } from '../../media/downloadable';
 import { formatBytes } from '../../media/format';
-import type { DetectedMedia, DownloadRequest, DownloadTask } from '../../shared/types';
+import { variantKey } from '../../media/variant-selection';
+import type {
+	DetectedMedia,
+	DownloadRequest,
+	DownloadTask,
+	MediaVariant,
+} from '../../shared/types';
 import { Button } from './ui/Button';
 import { ProgressBar } from './ui/ProgressBar';
 
@@ -13,7 +19,8 @@ import { ProgressBar } from './ui/ProgressBar';
 
 type Props = {
 	media: DetectedMedia;
-	variantId: string | undefined;
+	/** 選択中の品質。**id ではなく解決済みの variant を受け取る。** */
+	variant: MediaVariant | undefined;
 	task: DownloadTask | undefined;
 	onDownload: (request: DownloadRequest) => void;
 	onCancel: (taskId: string) => void;
@@ -39,16 +46,14 @@ function progressLabel(task: DownloadTask): string {
 	return '取得中…';
 }
 
-export function DownloadControl({ media, variantId, task, onDownload, onCancel, onRetry }: Props) {
+export function DownloadControl({ media, variant, task, onDownload, onCancel, onRetry }: Props) {
 	// まだ対応していない形式は、押せるのに保存できないボタンを出さずに理由を書く
 	if (isPendingSupport(media)) {
 		return <p className="text-muted text-xs">この形式の保存は準備中です</p>;
 	}
 
 	// **選択中の品質で判定する。** 品質ごとに URL が違うため、メディア全体だけを
-	// 見ると「保存」を出したのに Background が失敗タスクを作る組み合わせが出る
-	const variant = media.variants?.find((item) => item.id === variantId);
-
+	// 見ると「保存」を出したのに Background が失敗タスクを作る組み合わせが出る。
 	// DRM・対応外の理由・保存できない URL は MediaItem 側で表示済み。操作は出さない
 	if (!isDownloadable(media, variant)) return null;
 
@@ -100,7 +105,11 @@ export function DownloadControl({ media, variantId, task, onDownload, onCancel, 
 		<div>
 			<Button
 				onClick={() =>
-					onDownload({ mediaId: media.id, ...(variantId !== undefined && { variantId }) })
+					onDownload({
+						mediaId: media.id,
+						// id は再解析で振り直され、Background 側で別の品質を指しうる
+						...(variant !== undefined && { variantKey: variantKey(variant) }),
+					})
 				}
 			>
 				保存

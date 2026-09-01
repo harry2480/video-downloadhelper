@@ -22,6 +22,8 @@ pnpm test:integration  # Integration テスト（要 Chrome 起動、要 pnpm bu
 pnpm test:e2e          # E2E テスト（Playwright）
 pnpm lint:fix          # 自動フォーマット
 pnpm knip              # 未使用コード検出
+
+pnpm --filter extension icons   # src/icons/icon.svg からアイコン PNG を再生成
 ```
 
 ---
@@ -64,6 +66,7 @@ apps/extension/src/
 ├── processor/           # コアロジック（純粋）
 ├── media/               # コアロジック（純粋）— hls/ dash/ direct/
 ├── shared/              # コアロジック（純粋）— messages.ts, ports/, storage/, utils.ts
+├── icons/               # 拡張機能アイコン（icon.svg が原本。PNG は pnpm icons で生成）
 └── manifest.json
 ```
 
@@ -110,3 +113,4 @@ build を含めるのは manifest 由来のエラー（エントリ記述漏れ�
 - docs/品質チェック・テスト規約.md — verify・dependency-cruiser ルール
 - docs/テストガイドライン.md — テスト種別ごとの方針
 - docs/実装計画.md — Phase 0〜3 の実装手順
+- docs/残作業.md — 未着手・未解決の具体項目。**新しい作業に着手する前に読むこと**
