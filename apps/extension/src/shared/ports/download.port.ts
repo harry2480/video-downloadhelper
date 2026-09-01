@@ -33,9 +33,10 @@ export type DownloadSnapshot = {
 
 export type DownloaderPort = {
 	/** 保存を開始し、ブラウザのダウンロード ID を返す */
-	start: (request: { url: string; filename: string }) => Promise<
-		Result<number, DownloadStartFailure>
-	>;
+	start: (request: {
+		url: string;
+		filename: string;
+	}) => Promise<Result<number, DownloadStartFailure>>;
 
 	/** 進行中のダウンロードを止める。すでに終わっていても失敗にしない */
 	cancel: (downloadId: number) => Promise<void>;

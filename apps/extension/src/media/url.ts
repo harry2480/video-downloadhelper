@@ -1,4 +1,4 @@
-import { type Result, err, ok } from '../shared/utils';
+import { err, ok, type Result } from '../shared/utils';
 
 export type UrlError = { type: 'invalid-url'; input: string };
 

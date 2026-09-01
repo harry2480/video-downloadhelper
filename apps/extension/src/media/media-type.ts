@@ -70,10 +70,7 @@ export function normalizeMimeType(contentType: string): string {
  * 音声は `direct` ではなく `audio` として扱う。どちらも直接ダウンロード可能だが、
  * UI 上の表示と品質選択の要否が異なるため区別する。
  */
-export function detectMediaType(input: {
-	url: string;
-	contentType?: string;
-}): MediaType {
+export function detectMediaType(input: { url: string; contentType?: string }): MediaType {
 	if (input.contentType) {
 		const mime = normalizeMimeType(input.contentType);
 		const byMime = MIME_TO_TYPE[mime];

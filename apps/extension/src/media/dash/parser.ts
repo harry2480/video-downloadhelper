@@ -1,4 +1,4 @@
-import { type Result, err, ok } from '../../shared/utils';
+import { err, ok, type Result } from '../../shared/utils';
 import { isAudioCodec, isVideoCodec } from '../codecs';
 import { resolveUrl } from '../url';
 import type {
@@ -9,7 +9,7 @@ import type {
 	MpdParseError,
 	ParsedMpd,
 } from './types';
-import { type XmlElement, childNamed, childrenNamed, parseXml } from './xml';
+import { childNamed, childrenNamed, parseXml, type XmlElement } from './xml';
 
 /**
  * MPD のパーサー（ISO/IEC 23009-1）。

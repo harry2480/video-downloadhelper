@@ -1,8 +1,8 @@
 import {
-	type DetectionInput,
 	applyManifestAnalysis,
 	applyManifestFailure,
 	createDetectedMedia,
+	type DetectionInput,
 	upsertDetectedMedia,
 } from '../media/detected-media.model';
 import type { DetectedMediaRepository } from '../shared/storage/detected-media.repository';

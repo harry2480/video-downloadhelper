@@ -1,4 +1,4 @@
-import { type Result, err, ok } from '../../shared/utils';
+import { err, ok, type Result } from '../../shared/utils';
 import { getPathExtension, resolveUrl } from '../url';
 import type {
 	HlsAudioRendition,

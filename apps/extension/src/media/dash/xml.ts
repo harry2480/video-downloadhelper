@@ -1,4 +1,4 @@
-import { type Result, err, ok } from '../../shared/utils';
+import { err, ok, type Result } from '../../shared/utils';
 
 /**
  * MPD を読むための最小の XML パーサー。

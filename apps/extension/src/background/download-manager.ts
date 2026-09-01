@@ -10,7 +10,7 @@ import {
 } from '../processor/download-task';
 import { buildFilename } from '../processor/filename';
 import type { AssemblerPort } from '../shared/ports/assembler.port';
-import type { DownloadStartFailure, DownloaderPort } from '../shared/ports/download.port';
+import type { DownloaderPort, DownloadStartFailure } from '../shared/ports/download.port';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';
 import type { DetectedMedia, DownloadRequest, DownloadTask, MediaVariant } from '../shared/types';
 import { isPrivateHostUrl } from '../shared/utils';

@@ -3,9 +3,9 @@ import type { DetectionInput } from '../media/detected-media.model';
 import { variantKey } from '../media/variant-selection';
 import type { AssemblerPort, AssemblyJob } from '../shared/ports/assembler.port';
 import type {
+	DownloaderPort,
 	DownloadSnapshot,
 	DownloadStartFailure,
-	DownloaderPort,
 } from '../shared/ports/download.port';
 import type { DetectedMediaRepository } from '../shared/storage/detected-media.repository';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';

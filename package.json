@@ -23,11 +23,15 @@
 		"pre-push": "pnpm verify"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^1.9.4",
+		"@biomejs/biome": "^2.5.11",
 		"knip": "^6.33.0",
 		"simple-git-hooks": "^2.14.0"
 	},
 	"pnpm": {
-		"onlyBuiltDependencies": ["@biomejs/biome", "esbuild", "simple-git-hooks"]
+		"onlyBuiltDependencies": [
+			"@biomejs/biome",
+			"esbuild",
+			"simple-git-hooks"
+		]
 	}
 }

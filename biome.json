@@ -1,6 +1,6 @@
 {
-	"$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
-	"organizeImports": { "enabled": true },
+	"$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
+	"assist": { "actions": { "source": { "organizeImports": "on" } } },
 	"formatter": {
 		"indentStyle": "tab",
 		"lineWidth": 100
@@ -8,12 +8,12 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"recommended": true
+			"preset": "recommended"
 		}
 	},
 	"overrides": [
 		{
-			"include": ["**/test/**"],
+			"includes": ["**/test/**"],
 			"linter": {
 				"rules": {
 					"suspicious": {
@@ -23,10 +23,10 @@
 			}
 		},
 		{
-			"include": [
-				"apps/extension/src/shared/**",
-				"apps/extension/src/media/**",
-				"apps/extension/src/processor/**"
+			"includes": [
+				"**/apps/extension/src/shared/**",
+				"**/apps/extension/src/media/**",
+				"**/apps/extension/src/processor/**"
 			],
 			"linter": {
 				"rules": {
@@ -34,7 +34,13 @@
 						"noRestrictedGlobals": {
 							"level": "error",
 							"options": {
-								"deniedGlobals": ["chrome", "document", "window", "localStorage", "Blob"]
+								"deniedGlobals": {
+									"chrome": "コアロジック層は chrome.* に触れない。副作用は shared/ports/ の Port として宣言し、実行コンテキスト層から Adapter を注入する（docs/アーキテクチャ.md）",
+									"document": "コアロジック層は DOM に触れない。DOM の観測は content/ が担い、結果をメッセージで渡す",
+									"window": "コアロジック層は window に触れない。Service Worker には存在しないため、参照した時点で実行できる場所が限られる",
+									"localStorage": "永続化は shared/storage/*.repository.ts に集約する。chrome.storage を使うこと（docs/リポジトリ層設計規約.md）",
+									"Blob": "Blob の生成は offscreen/ が担う。Service Worker では URL.createObjectURL が使えない（要件定義 2.6）"
+								}
 							}
 						}
 					}
@@ -42,7 +48,7 @@
 			}
 		},
 		{
-			"include": ["apps/extension/src/shared/storage/**"],
+			"includes": ["**/apps/extension/src/shared/storage/**"],
 			"linter": {
 				"rules": {
 					"style": {
@@ -52,6 +58,11 @@
 			}
 		}
 	],
+	"css": {
+		"parser": {
+			"tailwindDirectives": true
+		}
+	},
 	"javascript": {
 		"formatter": {
 			"quoteStyle": "single",
@@ -59,15 +70,16 @@
 		}
 	},
 	"files": {
-		"ignore": [
-			"node_modules",
-			"dist",
-			"coverage",
-			"playwright-report",
-			"test-results",
-			".claude",
-			"**/test/fixtures",
-			"**/public/ffmpeg"
+		"includes": [
+			"**",
+			"!**/node_modules",
+			"!**/dist",
+			"!**/coverage",
+			"!**/playwright-report",
+			"!**/test-results",
+			"!**/.claude",
+			"!**/test/fixtures",
+			"!**/public/ffmpeg"
 		]
 	}
 }

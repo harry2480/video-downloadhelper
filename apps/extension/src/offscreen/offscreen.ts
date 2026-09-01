@@ -3,10 +3,10 @@ import { detectPlaylistKind, parseMediaPlaylist } from '../media/hls/parser';
 import { planDashDownload } from '../processor/dash-download';
 import type { MediaContainer, PlannedSegment } from '../processor/download-plan';
 import { planHlsDownload } from '../processor/hls-download';
-import { type RunToken, createRunRegistry } from '../processor/run-registry';
+import { createRunRegistry, type RunToken } from '../processor/run-registry';
 import {
-	type SegmentDownloadError,
 	downloadSegments,
+	type SegmentDownloadError,
 	totalByteLength,
 } from '../processor/segment-download';
 import {

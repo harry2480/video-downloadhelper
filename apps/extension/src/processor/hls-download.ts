@@ -5,7 +5,7 @@ import type {
 	HlsSegmentKey,
 	ParsedMediaPlaylist,
 } from '../media/hls/types';
-import { type Result, err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
+import { err, isHttpUrl, isPrivateHostUrl, ok, type Result } from '../shared/utils';
 import type { MediaContainer, PlannedSegment } from './download-plan';
 
 /**

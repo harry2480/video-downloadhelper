@@ -1,7 +1,7 @@
 import { AES_BLOCK_BYTES } from '../media/hls/decryption';
 import type { DecryptorPort } from '../shared/ports/decryptor.port';
-import type { SegmentFetchFailure, SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
-import { type Result, err, ok } from '../shared/utils';
+import type { SegmentFetcherPort, SegmentFetchFailure } from '../shared/ports/segment-fetcher.port';
+import { err, ok, type Result } from '../shared/utils';
 import type { PlannedSegment } from './download-plan';
 
 /**
