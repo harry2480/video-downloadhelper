@@ -1,0 +1,29 @@
+<!--
+  拡張機能アイコンの単一の情報源。PNG は scripts/generate-icons.mjs で
+  この SVG から生成する（`pnpm --filter extension icons`）。直接 PNG を
+  編集しないこと。
+
+  図案: 角丸の板（ブランド色 --color-primary #1a73e8）に、下向きの
+  ダウンロード矢印。矢じりは再生三角形と同じ形で、動画とダウンロードの
+  両方を一つの形で表す。16px でも潰れないよう、線ではなく面で構成し、
+  要素は 3 つに絞っている。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Video Download Helper">
+	<defs>
+		<linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#1a73e8" />
+			<stop offset="1" stop-color="#1558b8" />
+		</linearGradient>
+	</defs>
+
+	<rect width="128" height="128" rx="28" fill="url(#plate)" />
+
+	<!-- 矢の軸 -->
+	<rect x="55" y="24" width="18" height="30" rx="7" fill="#ffffff" />
+
+	<!-- 矢じり（＝再生三角形を下に向けたもの） -->
+	<path d="M36 44h56a4 4 0 0 1 3.1 6.5l-28 33.5a4 4 0 0 1-6.2 0l-28-33.5A4 4 0 0 1 36 44z" fill="#ffffff" />
+
+	<!-- 受け皿 -->
+	<rect x="34" y="100" width="60" height="14" rx="7" fill="#ffffff" />
+</svg>

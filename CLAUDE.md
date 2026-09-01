@@ -22,6 +22,8 @@ pnpm test:integration  # Integration テスト（要 Chrome 起動、要 pnpm bu
 pnpm test:e2e          # E2E テスト（Playwright）
 pnpm lint:fix          # 自動フォーマット
 pnpm knip              # 未使用コード検出
+
+pnpm --filter extension icons   # src/icons/icon.svg からアイコン PNG を再生成
 ```
 
 ---
@@ -64,6 +66,7 @@ apps/extension/src/
 ├── processor/           # コアロジック（純粋）
 ├── media/               # コアロジック（純粋）— hls/ dash/ direct/
 ├── shared/              # コアロジック（純粋）— messages.ts, ports/, storage/, utils.ts
+├── icons/               # 拡張機能アイコン（icon.svg が原本。PNG は pnpm icons で生成）
 └── manifest.json
 ```
 

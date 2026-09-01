@@ -25,6 +25,18 @@ pnpm dev
 **開発中に Service Worker の DevTools を開きっぱなしにすると SW が停止しなくなる。**
 非常駐前提のバグを見逃すため、動作確認時は閉じること。
 
+## アイコン
+
+原本は `src/icons/icon.svg`。manifest が参照する PNG は SVG から生成する。
+
+```bash
+pnpm --filter extension icons   # 16 / 32 / 48 / 128 px を書き出す
+```
+
+PNG は生成物だが、ストア提出物に含めるためリポジトリへコミットしている。
+**図案を変えたら必ずスクリプトを実行し、生成された PNG ごとコミットすること。**
+PNG を直接編集すると次の生成で上書きされる。
+
 ## 構成
 
 依存方向: `background/offscreen/content/popup → processor → media → shared`
