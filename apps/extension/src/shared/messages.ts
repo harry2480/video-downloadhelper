@@ -53,10 +53,13 @@ export type BackgroundToPopup =
  */
 export type BackgroundToOffscreen =
 	| {
-			kind: 'assemble-hls';
+			kind: 'assemble';
 			taskId: string;
-			/** Media Playlist の絶対 URL */
-			playlistUrl: string;
+			/** HLS の Media Playlist、または DASH の MPD の絶対 URL */
+			manifestUrl: string;
+			format: 'hls' | 'dash';
+			/** DASH で保存する Representation の id */
+			representationId?: string;
 			/** 合計サイズの上限（バイト） */
 			maxBytes: number;
 			/**
@@ -283,19 +286,30 @@ export function parseOffscreenMessage(raw: unknown): OffscreenToBackground | und
 export function parseAssemblyCommand(raw: unknown): BackgroundToOffscreen | undefined {
 	if (!isRecord(raw)) return undefined;
 
-	if (raw.kind === 'assemble-hls') {
+	if (raw.kind === 'assemble') {
 		const taskId = parseId(raw.taskId);
-		const playlistUrl = parseId(raw.playlistUrl);
+		const manifestUrl = parseId(raw.manifestUrl);
 		const maxBytes = parseCount(raw.maxBytes);
-		if (taskId === undefined || playlistUrl === undefined || maxBytes === undefined) {
+		if (taskId === undefined || manifestUrl === undefined || maxBytes === undefined) {
 			return undefined;
 		}
-		if (!isHttpUrl(playlistUrl)) return undefined;
+		if (!isHttpUrl(manifestUrl)) return undefined;
+		if (raw.format !== 'hls' && raw.format !== 'dash') return undefined;
+
+		// **指定があるのに読めない値なら受け取らない。** 未指定として扱うと
+		// 既定の Representation で保存してしまう
+		let representationId: string | undefined;
+		if (raw.representationId !== undefined) {
+			representationId = parseId(raw.representationId);
+			if (representationId === undefined) return undefined;
+		}
 
 		return {
-			kind: 'assemble-hls',
+			kind: 'assemble',
 			taskId,
-			playlistUrl,
+			manifestUrl,
+			format: raw.format,
+			...(representationId !== undefined && { representationId }),
 			maxBytes,
 			allowPrivateHosts: raw.allowPrivateHosts === true,
 		};

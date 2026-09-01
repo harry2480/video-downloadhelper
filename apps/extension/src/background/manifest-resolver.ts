@@ -1,10 +1,11 @@
+import { analyzeMpd } from '../media/dash/analysis';
 import { analyzeHlsManifest, withEstimatedSizes } from '../media/hls/analysis';
 import type { MediaFetcherPort } from '../shared/ports/media-fetcher.port';
 import type { DetectedMedia } from '../shared/types';
 import type { MediaRegistry } from './media-registry';
 
 /**
- * 検出した HLS マニフェストを取得し直して解析する（要件定義 2.2 の再フェッチ方式）。
+ * 検出した HLS / DASH マニフェストを取得し直して解析する（要件定義 2.2 の再フェッチ方式）。
  *
  * 取得に失敗する URL（認証付き・有効期限付き）は珍しくない。
  * その場合は対応外として理由を記録し、検出自体は残す。
@@ -19,6 +20,7 @@ import type { MediaRegistry } from './media-registry';
 const FETCH_FAILED = 'マニフェストを取得できませんでした（認証や有効期限が原因の可能性があります）';
 const TOO_LARGE = 'マニフェストとして扱うには大きすぎます';
 const NOT_A_PLAYLIST = 'マニフェストとして解析できませんでした';
+const NOT_AN_MPD = 'MPD として解析できませんでした';
 
 /** 1 件あたりの自動再試行の上限。使い切った後はユーザーの更新操作でのみ再開する。 */
 const MAX_ATTEMPTS = 3;
@@ -87,7 +89,7 @@ export class ManifestResolver {
 			// 取得結果で書き換えてしまう
 			if (generation !== this.registry.currentGeneration(tabId)) return;
 
-			if (item.type !== 'hls') continue;
+			if (item.type !== 'hls' && item.type !== 'dash') continue;
 			if (item.manifestResolved === true) continue;
 
 			const key = stateKey(tabId, item.dedupeKey);
@@ -192,10 +194,14 @@ export class ManifestResolver {
 			return 'transient-failure';
 		}
 
-		const analyzed = analyzeHlsManifest(fetched.text, media.sourceUrl);
+		const analyzed =
+			media.type === 'dash'
+				? analyzeMpd(fetched.text, media.sourceUrl)
+				: analyzeHlsManifest(fetched.text, media.sourceUrl);
+
 		if (!analyzed.ok) {
 			await this.registry.enrich(tabId, media.dedupeKey, generation, {
-				unsupportedReason: NOT_A_PLAYLIST,
+				unsupportedReason: media.type === 'dash' ? NOT_AN_MPD : NOT_A_PLAYLIST,
 			});
 			return 'settled';
 		}

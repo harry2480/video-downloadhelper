@@ -336,18 +336,69 @@ describe('parseAssemblyCommand', () => {
 	it('組み立ての依頼を通す', () => {
 		expect(
 			parseAssemblyCommand({
-				kind: 'assemble-hls',
+				kind: 'assemble',
 				taskId: 't1',
-				playlistUrl: 'https://cdn.example.com/index.m3u8',
+				manifestUrl: 'https://cdn.example.com/index.m3u8',
+				format: 'hls',
 				maxBytes: 100,
 			}),
 		).toEqual({
-			kind: 'assemble-hls',
+			kind: 'assemble',
 			taskId: 't1',
-			playlistUrl: 'https://cdn.example.com/index.m3u8',
+			manifestUrl: 'https://cdn.example.com/index.m3u8',
+			format: 'hls',
 			maxBytes: 100,
 			allowPrivateHosts: false,
 		});
+	});
+
+	it('DASH の依頼と Representation の指定を通す', () => {
+		expect(
+			parseAssemblyCommand({
+				kind: 'assemble',
+				taskId: 't1',
+				manifestUrl: 'https://cdn.example.com/manifest.mpd',
+				format: 'dash',
+				representationId: 'hi',
+				maxBytes: 100,
+			}),
+		).toEqual({
+			kind: 'assemble',
+			taskId: 't1',
+			manifestUrl: 'https://cdn.example.com/manifest.mpd',
+			format: 'dash',
+			representationId: 'hi',
+			maxBytes: 100,
+			allowPrivateHosts: false,
+		});
+	});
+
+	it('知らない形式は受け付けない', () => {
+		expect(
+			parseAssemblyCommand({
+				kind: 'assemble',
+				taskId: 't1',
+				manifestUrl: 'https://cdn.example.com/x',
+				format: 'smooth',
+				maxBytes: 100,
+			}),
+		).toBeUndefined();
+	});
+
+	it('Representation の指定が壊れていれば要求ごと捨てる', () => {
+		// 未指定として扱うと、既定の Representation で保存してしまう
+		for (const representationId of [42, '', 'x'.repeat(4_097)]) {
+			expect(
+				parseAssemblyCommand({
+					kind: 'assemble',
+					taskId: 't1',
+					manifestUrl: 'https://cdn.example.com/manifest.mpd',
+					format: 'dash',
+					representationId,
+					maxBytes: 100,
+				}),
+			).toBeUndefined();
+		}
 	});
 
 	it('中止と解放を通す', () => {
@@ -363,9 +414,10 @@ describe('parseAssemblyCommand', () => {
 
 	it('プライベート宛の許可を明示されたときだけ真にする', () => {
 		const parsed = parseAssemblyCommand({
-			kind: 'assemble-hls',
+			kind: 'assemble',
 			taskId: 't1',
-			playlistUrl: 'https://cdn.example.com/index.m3u8',
+			manifestUrl: 'https://cdn.example.com/index.m3u8',
+			format: 'hls',
 			maxBytes: 100,
 			allowPrivateHosts: true,
 		});
@@ -388,9 +440,10 @@ describe('parseAssemblyCommand', () => {
 	it('取得できないスキームのプレイリストは受け付けない', () => {
 		expect(
 			parseAssemblyCommand({
-				kind: 'assemble-hls',
+				kind: 'assemble',
 				taskId: 't1',
-				playlistUrl: 'file:///etc/passwd',
+				manifestUrl: 'file:///etc/passwd',
+				format: 'hls',
 				maxBytes: 100,
 			}),
 		).toBeUndefined();
@@ -398,9 +451,9 @@ describe('parseAssemblyCommand', () => {
 
 	it('形が合わないものは破棄する', () => {
 		expect(parseAssemblyCommand(undefined)).toBeUndefined();
-		expect(parseAssemblyCommand({ kind: 'assemble-hls', taskId: 't1' })).toBeUndefined();
+		expect(parseAssemblyCommand({ kind: 'assemble', taskId: 't1' })).toBeUndefined();
 		expect(
-			parseAssemblyCommand({ kind: 'assemble-hls', taskId: 't1', playlistUrl: 'https://a' }),
+			parseAssemblyCommand({ kind: 'assemble', taskId: 't1', manifestUrl: 'https://a' }),
 		).toBeUndefined();
 		expect(parseAssemblyCommand({ kind: 'cancel-assembly' })).toBeUndefined();
 		expect(parseAssemblyCommand({ kind: 'release-object-url' })).toBeUndefined();

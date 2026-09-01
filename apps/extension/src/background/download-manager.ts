@@ -1,5 +1,6 @@
 import { downloadRejectionReason, resolveDownloadUrl } from '../media/downloadable';
 import { variantKey } from '../media/variant-selection';
+import type { MediaContainer } from '../processor/download-plan';
 import {
 	applyDownloadSnapshot,
 	isActive,
@@ -8,7 +9,6 @@ import {
 	resetDownloadTask,
 } from '../processor/download-task';
 import { buildFilename } from '../processor/filename';
-import type { HlsContainer } from '../processor/hls-download';
 import type { AssemblerPort } from '../shared/ports/assembler.port';
 import type { DownloadStartFailure, DownloaderPort } from '../shared/ports/download.port';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';
@@ -319,7 +319,7 @@ export class DownloadManager {
 		taskId: string,
 		objectUrl: string,
 		bytes: number,
-		container: HlsContainer,
+		container: MediaContainer,
 	): Promise<void> {
 		await this.enqueue(async () => {
 			const tasks = await this.repository.findAll();
@@ -358,9 +358,9 @@ export class DownloadManager {
 	}
 
 	/**
-	 * 取得を始める。直接保存できるものはブラウザへ、HLS は Offscreen へ渡す。
+	 * 取得を始める。直接保存できるものはブラウザへ、HLS / DASH は Offscreen へ渡す。
 	 *
-	 * HLS はセグメントを取得して結合する必要があり、`URL.createObjectURL` が
+	 * セグメントを取得して結合する必要があり、`URL.createObjectURL` が
 	 * 使えない Service Worker では完結しない（要件定義 2.6）。
 	 */
 	private async beginTask(
@@ -369,7 +369,9 @@ export class DownloadManager {
 		variant: MediaVariant | undefined,
 		url: string,
 	): Promise<void> {
-		if (media.type !== 'hls') {
+		// 直接保存できるものはブラウザへ渡す。セグメントを集める必要があるのは
+		// HLS と DASH だけ
+		if (media.type !== 'hls' && media.type !== 'dash') {
 			await this.begin(task, url);
 			return;
 		}
@@ -388,7 +390,12 @@ export class DownloadManager {
 		try {
 			await this.assembler.start({
 				taskId: task.id,
-				playlistUrl: url,
+				// **DASH は MPD を読み直して計画を組み立てる。** variant の URL は
+				// 初期化セグメントを指すため、マニフェストとしては使えない
+				manifestUrl: media.type === 'dash' ? media.sourceUrl : url,
+				format: media.type,
+				...(media.type === 'dash' &&
+					variant?.sourceId !== undefined && { representationId: variant.sourceId }),
 				maxBytes: MAX_TOTAL_BYTES,
 				// ページが差し替えられない値で判断する。公開ページから
 				// LAN やループバックを叩かせないため
@@ -564,7 +571,7 @@ function replace(tasks: readonly DownloadTask[], updated: DownloadTask): Downloa
  * 既に同じ拡張子なら触らない。ベース名にドットが含まれていても、
  * 最後のドットより後ろだけを見る。
  */
-function withExtension(filename: string, container: HlsContainer): string {
+function withExtension(filename: string, container: MediaContainer): string {
 	const dotIndex = filename.lastIndexOf('.');
 	const base = dotIndex <= 0 ? filename : filename.slice(0, dotIndex);
 	return `${base}.${container}`;

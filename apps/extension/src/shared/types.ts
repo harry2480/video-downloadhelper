@@ -31,6 +31,14 @@ export type MediaVariant = {
 	/** 音声のみの Representation / Variant か */
 	audioOnly?: boolean;
 
+	/**
+	 * 配信側が付けた識別子（DASH の `Representation@id`）。
+	 *
+	 * **再解析後も同じ品質を指すために使う。** 署名付き URL のように
+	 * 取得のたびに変わる値では突き合わせられない。
+	 */
+	sourceId?: string;
+
 	/** bytes */
 	estimatedSize?: number;
 };

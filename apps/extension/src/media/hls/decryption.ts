@@ -49,7 +49,8 @@ export function ivFromSequenceNumber(sequenceNumber: number): Uint8Array<ArrayBu
 	return bytes;
 }
 
-export type SegmentDecryption = {
+/** 計画が持つ復号材料。PlannedSegment からのみ参照する */
+type SegmentDecryption = {
 	/** 鍵の取得先 */
 	keyUrl: string;
 	iv: Uint8Array<ArrayBuffer>;

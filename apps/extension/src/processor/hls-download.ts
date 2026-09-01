@@ -1,4 +1,4 @@
-import { type SegmentDecryption, resolveSegmentDecryption } from '../media/hls/decryption';
+import { resolveSegmentDecryption } from '../media/hls/decryption';
 import type {
 	HlsByteRange,
 	HlsInitSegment,
@@ -6,6 +6,7 @@ import type {
 	ParsedMediaPlaylist,
 } from '../media/hls/types';
 import { type Result, err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
+import type { MediaContainer, PlannedSegment } from './download-plan';
 
 /**
  * HLS の保存計画（要件定義 2.3）。
@@ -45,31 +46,13 @@ const MAX_SEGMENTS = 20_000;
  */
 const MAX_KEY_URLS = 256;
 
-/** 取得する 1 単位。初期化セグメントも同じ形で扱う。 */
-export type PlannedSegment = {
-	/** 解決済みの絶対 URL */
-	url: string;
-	/** #EXT-X-BYTERANGE。1 つのファイルを複数セグメントで共有する場合に付く */
-	byteRange?: HlsByteRange;
-	/** AES-128 の復号材料。無ければ平文 */
-	decryption?: SegmentDecryption;
-};
-
-/**
- * 出力するコンテナ。
- *
- * TS セグメントは単純連結で `.ts`。fMP4 は初期化セグメントを先頭に置いて
- * 連結すると `.mp4` として再生できる。**拡張子は出力の中身に合わせる。**
- */
-export type HlsContainer = 'ts' | 'mp4';
-
 /** 計画の全体。offscreen が受け取って取得と結合に使う。 */
 type HlsDownloadPlan = {
 	/** 取得する順に並んだ単位。fMP4 の初期化セグメントは先頭 */
 	segments: PlannedSegment[];
 	/** 秒。進捗の表示や推定に使う */
 	totalDuration: number;
-	container: HlsContainer;
+	container: MediaContainer;
 };
 
 type HlsDownloadRejection = { reason: string };

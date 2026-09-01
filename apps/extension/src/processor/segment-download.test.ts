@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DecryptorPort } from '../shared/ports/decryptor.port';
 import type { SegmentFetchOptions, SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
 import { err, ok } from '../shared/utils';
-import type { PlannedSegment } from './hls-download';
+import type { PlannedSegment } from './download-plan';
 import { downloadSegments, totalByteLength } from './segment-download';
 
 /**
@@ -236,6 +236,20 @@ describe('バイトレンジ', () => {
 			{ offset: 0, length: 100 },
 			{ offset: 100, length: 120 },
 		]);
+	});
+
+	it('1 本ぶんの上限を Port へ渡す', async () => {
+		// SegmentBase の DASH は 1 ファイルで全体を成す。セグメント 1 本ぶんの
+		// 上限では大きな動画が必ず失敗する
+		const { fetcher, limits } = createFetcher();
+
+		await downloadSegments({
+			segments: [{ url: 'https://cdn.example.com/whole.mp4', maxBytes: 2_000 }],
+			fetcher,
+			maxBytes: 10_000,
+		});
+
+		expect(limits).toEqual([2_000]);
 	});
 
 	it('範囲が無ければ渡さない', async () => {

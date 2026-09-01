@@ -1,5 +1,8 @@
+import { parseMpd } from '../media/dash/parser';
 import { detectPlaylistKind, parseMediaPlaylist } from '../media/hls/parser';
-import { type HlsContainer, planHlsDownload } from '../processor/hls-download';
+import { planDashDownload } from '../processor/dash-download';
+import type { MediaContainer, PlannedSegment } from '../processor/download-plan';
+import { planHlsDownload } from '../processor/hls-download';
 import { type RunToken, createRunRegistry } from '../processor/run-registry';
 import { type SegmentDownloadError, downloadSegments } from '../processor/segment-download';
 import {
@@ -26,16 +29,22 @@ const FETCH_FAILED = 'セグメントを取得できませんでした';
 const KEY_FAILED = '復号鍵を取得できませんでした';
 const DECRYPT_FAILED = 'セグメントを復号できませんでした';
 const RANGE_FAILED = '配信側がバイトレンジ指定に対応していませんでした';
-const PLAYLIST_FAILED = 'プレイリストを取得できませんでした';
+const PLAYLIST_FAILED = 'マニフェストを取得できませんでした';
 const NOT_A_PLAYLIST = 'プレイリストとして解析できませんでした';
+const NOT_AN_MPD = 'MPD として解析できませんでした';
 const MASTER_PLAYLIST = '画質を選び直してからもう一度お試しください';
 const TOO_LARGE = 'サイズが上限を超えたため中止しました';
 const CANCELLED = 'ダウンロードを中止しました';
 
-type AssembleCommand = Extract<BackgroundToOffscreen, { kind: 'assemble-hls' }>;
+type AssembleCommand = Extract<BackgroundToOffscreen, { kind: 'assemble' }>;
+
+type AssemblyPlan = {
+	segments: readonly PlannedSegment[];
+	container: MediaContainer;
+};
 
 /** 出力するコンテナに対応する MIME タイプ。 */
-const MIME_BY_CONTAINER: Record<HlsContainer, string> = {
+const MIME_BY_CONTAINER: Record<MediaContainer, string> = {
 	ts: 'video/mp2t',
 	mp4: 'video/mp4',
 };
@@ -81,7 +90,7 @@ function notifyDone(
 	taskId: string,
 	objectUrl: string,
 	bytes: number,
-	container: HlsContainer,
+	container: MediaContainer,
 ): void {
 	void chrome.runtime
 		.sendMessage({ kind: 'assembly-done', taskId, objectUrl, bytes, container })
@@ -111,34 +120,59 @@ function describeFailure(error: SegmentDownloadError): string {
 	}
 }
 
+/**
+ * マニフェストを解析して保存計画を作る。
+ *
+ * 形式ごとの違いはここだけに閉じる。取得と結合から先は共通。
+ */
+function buildPlan(
+	command: AssembleCommand,
+	text: string,
+): { ok: true; value: AssemblyPlan } | { ok: false; reason: string } {
+	const { manifestUrl, allowPrivateHosts } = command;
+
+	if (command.format === 'dash') {
+		const parsed = parseMpd(text, manifestUrl);
+		if (!parsed.ok) return { ok: false, reason: NOT_AN_MPD };
+
+		const plan = planDashDownload(parsed.value, {
+			allowPrivateHosts,
+			// 1 本で全体を成す構成（SegmentBase）では、セグメント 1 本ぶんの
+			// 上限では足りない。全体の上限をそのまま許す
+			singleSegmentMaxBytes: command.maxBytes,
+			...(command.representationId !== undefined && {
+				representationId: command.representationId,
+			}),
+		});
+		return plan.ok ? { ok: true, value: plan.value } : { ok: false, reason: plan.error.reason };
+	}
+
+	// Master Playlist を渡されたら、画質が未確定のまま押されている
+	if (detectPlaylistKind(text) === 'master') return { ok: false, reason: MASTER_PLAYLIST };
+
+	const parsed = parseMediaPlaylist(text, manifestUrl);
+	if (!parsed.ok) return { ok: false, reason: NOT_A_PLAYLIST };
+
+	const plan = planHlsDownload(parsed.value, { allowPrivateHosts });
+	return plan.ok ? { ok: true, value: plan.value } : { ok: false, reason: plan.error.reason };
+}
+
 async function assemble(command: AssembleCommand): Promise<void> {
-	const { taskId, playlistUrl, maxBytes, allowPrivateHosts } = command;
+	const { taskId, manifestUrl, maxBytes, allowPrivateHosts } = command;
 
 	const run = runs.start(taskId);
 	// 取得の宛先は依頼ごとに決まる。使い回さず、この実行のためだけに作る
 	const fetcher = createSegmentFetcher({ allowPrivateHosts });
 
-	const manifest = await fetcher.fetchText(playlistUrl);
+	const manifest = await fetcher.fetchText(manifestUrl);
 	if (!manifest.ok) {
 		fail(taskId, run, PLAYLIST_FAILED);
 		return;
 	}
 
-	// Master Playlist を渡されたら、画質が未確定のまま押されている
-	if (detectPlaylistKind(manifest.text) === 'master') {
-		fail(taskId, run, MASTER_PLAYLIST);
-		return;
-	}
-
-	const parsed = parseMediaPlaylist(manifest.text, playlistUrl);
-	if (!parsed.ok) {
-		fail(taskId, run, NOT_A_PLAYLIST);
-		return;
-	}
-
-	const plan = planHlsDownload(parsed.value, { allowPrivateHosts });
+	const plan = buildPlan(command, manifest.text);
 	if (!plan.ok) {
-		fail(taskId, run, plan.error.reason);
+		fail(taskId, run, plan.reason);
 		return;
 	}
 
@@ -191,7 +225,7 @@ chrome.runtime.onMessage.addListener((raw, sender) => {
 	const command = parseAssemblyCommand(raw);
 	if (command === undefined) return false;
 
-	if (command.kind === 'assemble-hls') {
+	if (command.kind === 'assemble') {
 		void assemble(command).catch(() => {
 			// 例外で降りたときも、走っている実行として残さない
 			const run = runs.start(command.taskId);
