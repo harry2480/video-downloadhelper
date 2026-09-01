@@ -683,6 +683,20 @@ seg.m4s
 			);
 		});
 
+		it('METHOD を欠く #EXT-X-KEY を平文として扱わない', () => {
+			// METHOD は必須属性（RFC 8216 4.3.2.4）。欠けているのは壊れた
+			// プレイリストで、平文として扱うと暗号文をそのまま保存する
+			const content = `#EXTM3U
+#EXT-X-KEY:URI="k.bin"
+#EXTINF:6.0,
+seg.ts
+#EXT-X-ENDLIST`;
+			const parsed = unwrap(parseMediaPlaylist(content, MEDIA_BASE));
+
+			expect(parsed.segments[0]?.key).toEqual({});
+			expect(parsed.encryption).toEqual({ method: 'aes-128' });
+		});
+
 		it('URI を欠く #EXT-X-KEY でも平文として扱わない', () => {
 			// 復号できないことに変わりはない。鍵なしで通すと暗号文を保存する
 			const content = '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128\n#EXTINF:6.0,\nseg.ts\n#EXT-X-ENDLIST';

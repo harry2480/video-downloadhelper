@@ -38,6 +38,8 @@ function parseRange(
 
 	const [, startText, endText] = match;
 	if (startText === '' && endText === '') return 'invalid';
+	// 空ファイルに満たせる範囲は無い。206 で `bytes 0--1/0` を返さない
+	if (size === 0) return 'invalid';
 
 	// 末尾から N バイト（`bytes=-500`）
 	if (startText === '') {
@@ -92,7 +94,7 @@ export async function startStaticServer(): Promise<StaticServer> {
 				// **Range に応える。** #EXT-X-BYTERANGE のセグメントは 1 つの
 				// ファイルの一部を取りに来る。拡張機能側は 206 でなければ
 				// 失敗にするため、200 で全体を返すとその経路を検証できない
-				const range = parseRange(request.headers.range, body.byteLength);
+				let range = parseRange(request.headers.range, body.byteLength);
 				if (range === 'invalid') {
 					response
 						.writeHead(416, { 'content-range': `bytes */${body.byteLength}` })
@@ -101,6 +103,15 @@ export async function startStaticServer(): Promise<StaticServer> {
 				}
 
 				if (range !== undefined) {
+					// `?shiftRange=N` を付けると、**要求と同じ長さの別範囲**を返す。
+					// 206 と実長だけを見る実装が中身のずれを見逃すことの検証に使う
+					const shift = Number(requestUrl.searchParams.get('shiftRange'));
+					if (Number.isFinite(shift) && shift !== 0) {
+						const length = range.end - range.start + 1;
+						const start = Math.max(0, Math.min(range.start + shift, body.byteLength - length));
+						range = { start, end: start + length - 1 };
+					}
+
 					const part = body.subarray(range.start, range.end + 1);
 					response.writeHead(206, {
 						'content-type': contentType,

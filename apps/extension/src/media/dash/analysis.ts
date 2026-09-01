@@ -138,6 +138,16 @@ export function analyzeMpd(
 
 	// **一覧に出すのは実際に保存できるものだけ。** 押せるのに保存できない
 	// 状態を作らない（`media/downloadable.ts` と同じ方針）
+	//
+	// id が重複していると、保存側は「一意に決まらない」として必ず失敗する
+	// （`processor/dash-download.ts`）。出しても選べないので先に洗い出す
+	const seenIds = new Set<string>();
+	const duplicatedIds = new Set<string>();
+	for (const representation of primary.representations) {
+		if (seenIds.has(representation.id)) duplicatedIds.add(representation.id);
+		seenIds.add(representation.id);
+	}
+
 	const usable: { representation: DashRepresentation; url: string }[] = [];
 	for (const representation of primary.representations) {
 		// セグメントが 1 本も無ければ、選ばせても保存の段で必ず失敗する
@@ -147,6 +157,7 @@ export function analyzeMpd(
 		// 選んだのと違う画質（先頭）が保存される
 		if (representation.id === '') continue;
 		if (representation.id.length > MAX_REPRESENTATION_ID_LENGTH) continue;
+		if (duplicatedIds.has(representation.id)) continue;
 
 		// **スキームをここで絞る。** MPD の中身はページ側が決められるため、
 		// 相対 URL の解決結果に file: や data: が現れうる

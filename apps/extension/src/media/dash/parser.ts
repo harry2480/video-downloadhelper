@@ -157,13 +157,24 @@ function parseRangeAttribute(value: string | undefined): DashSegment['byteRange'
  * MPD / Period / AdaptationSet / Representation の各段に置ける。
  * 内側が絶対 URL なら外側を上書きする（URL の解決規則そのもの）。
  */
-function resolveBase(element: XmlElement, parentBase: string): Result<string, MpdParseError> {
-	const base = childNamed(element, 'BaseURL')?.text.trim();
-	if (base === undefined || base === '') return ok(parentBase);
+/**
+ * 基準 URL と、**BaseURL がどこかで宣言されたか**。
+ *
+ * 宣言が一度も無ければ、基準 URL はマニフェスト自身を指したままになる。
+ * そのまま 1 本のメディアとして扱うと、MPD の XML を保存してしまう。
+ */
+type ResolvedBase = { url: string; declared: boolean };
 
-	const resolved = resolveUrl(base, parentBase);
+function resolveBase(
+	element: XmlElement,
+	parent: ResolvedBase,
+): Result<ResolvedBase, MpdParseError> {
+	const base = childNamed(element, 'BaseURL')?.text.trim();
+	if (base === undefined || base === '') return ok(parent);
+
+	const resolved = resolveUrl(base, parent.url);
 	if (!resolved.ok) return err({ type: 'invalid-uri', input: base });
-	return ok(resolved.value);
+	return ok({ url: resolved.value, declared: true });
 }
 
 /**
@@ -416,7 +427,7 @@ function inheritDeclarations(
 
 function parseRepresentation(
 	element: XmlElement,
-	parentBase: string,
+	parentBase: ResolvedBase,
 	inherited: SegmentDeclarations,
 	periodDuration: number | undefined,
 	budget: SegmentBudget,
@@ -450,7 +461,7 @@ function parseRepresentation(
 	if (preferred === 'template' && declared.template !== undefined) {
 		const built = fromSegmentTemplate(
 			declared.template,
-			base.value,
+			base.value.url,
 			id,
 			bandwidth,
 			periodDuration,
@@ -459,16 +470,15 @@ function parseRepresentation(
 		if (!built.ok) return built;
 		source = built.value;
 	} else if (preferred === 'list' && declared.list !== undefined) {
-		const built = fromSegmentList(declared.list, base.value, budget);
+		const built = fromSegmentList(declared.list, base.value.url, budget);
 		if (!built.ok) return built;
 		source = built.value;
-	} else if (preferred === 'segmentBase') {
-		source = fromSegmentBase(base.value);
-	} else if (childNamed(element, 'BaseURL') !== undefined) {
+	} else if (base.value.declared) {
 		// **BaseURL が宣言されているときだけ「全体で 1 本」とみなす。**
 		// そうでないと、セグメント指定を読み損ねた Representation が
-		// マニフェスト自身の URL を指し、MPD の XML を .mp4 として保存する
-		source = { segments: [{ uri: base.value }] };
+		// マニフェスト自身の URL を指し、MPD の XML を .mp4 として保存する。
+		// SegmentBase（初期化部分も本体も同じ 1 ファイル）もこの経路で扱う
+		source = fromSegmentBase(base.value.url);
 	} else {
 		source = { segments: [] };
 	}
@@ -506,7 +516,7 @@ export function parseMpd(content: string, baseUrl: string): Result<ParsedMpd, Mp
 	if (document.value.name !== 'MPD') return err({ type: 'not-an-mpd' });
 
 	const root = document.value;
-	const mpdBase = resolveBase(root, baseUrl);
+	const mpdBase = resolveBase(root, { url: baseUrl, declared: false });
 	if (!mpdBase.ok) return mpdBase;
 
 	const isLive = (root.attributes.type ?? 'static').toLowerCase() === 'dynamic';
