@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<title>DASH の動画</title>
+	</head>
+	<body>
+		<h1>DASH の動画</h1>
+		<script>
+			const request = new XMLHttpRequest();
+			request.open('GET', 'dash/manifest.mpd');
+			request.send();
+		</script>
+	</body>
+</html>

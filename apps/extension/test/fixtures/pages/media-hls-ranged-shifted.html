@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ja">
+	<head>
+		<meta charset="UTF-8" />
+		<title>要求と違う範囲を返す HLS</title>
+	</head>
+	<body>
+		<h1>要求と違う範囲を返す HLS</h1>
+		<script>
+			const request = new XMLHttpRequest();
+			request.open('GET', 'hls/ranged-shifted.m3u8');
+			request.send();
+		</script>
+	</body>
+</html>

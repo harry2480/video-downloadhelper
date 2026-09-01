@@ -19,7 +19,42 @@ const CONTENT_TYPES: Record<string, string> = {
 	'.mpd': 'application/dash+xml',
 	'.ts': 'video/mp2t',
 	'.m4s': 'video/iso.segment',
+	'.m4a': 'audio/mp4',
 };
+
+/**
+ * `Range: bytes=<start>-<end>` を解析する（両端を含む）。
+ *
+ * 単一範囲のみ扱う。複数範囲は multipart 応答になり、テストで使う予定がない。
+ */
+function parseRange(
+	header: string | undefined,
+	size: number,
+): { start: number; end: number } | 'invalid' | undefined {
+	if (header === undefined) return undefined;
+
+	const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+	if (match === null) return 'invalid';
+
+	const [, startText, endText] = match;
+	if (startText === '' && endText === '') return 'invalid';
+	// 空ファイルに満たせる範囲は無い。206 で `bytes 0--1/0` を返さない
+	if (size === 0) return 'invalid';
+
+	// 末尾から N バイト（`bytes=-500`）
+	if (startText === '') {
+		const suffix = Number(endText);
+		if (!Number.isFinite(suffix) || suffix <= 0) return 'invalid';
+		return { start: Math.max(0, size - suffix), end: size - 1 };
+	}
+
+	const start = Number(startText);
+	const end = endText === '' ? size - 1 : Number(endText);
+	if (!Number.isFinite(start) || !Number.isFinite(end)) return 'invalid';
+	if (start > end || start >= size) return 'invalid';
+
+	return { start, end: Math.min(end, size - 1) };
+}
 
 export type StaticServer = {
 	/** 例: http://127.0.0.1:53210 */
@@ -55,9 +90,44 @@ export async function startStaticServer(): Promise<StaticServer> {
 			try {
 				const body = await readFile(resolved);
 				const contentType = CONTENT_TYPES[path.extname(resolved)] ?? 'application/octet-stream';
+
+				// **Range に応える。** #EXT-X-BYTERANGE のセグメントは 1 つの
+				// ファイルの一部を取りに来る。拡張機能側は 206 でなければ
+				// 失敗にするため、200 で全体を返すとその経路を検証できない
+				let range = parseRange(request.headers.range, body.byteLength);
+				if (range === 'invalid') {
+					response
+						.writeHead(416, { 'content-range': `bytes */${body.byteLength}` })
+						.end('range not satisfiable');
+					return;
+				}
+
+				if (range !== undefined) {
+					// `?shiftRange=N` を付けると、**要求と同じ長さの別範囲**を返す。
+					// 206 と実長だけを見る実装が中身のずれを見逃すことの検証に使う
+					const shift = Number(requestUrl.searchParams.get('shiftRange'));
+					if (Number.isFinite(shift) && shift !== 0) {
+						const length = range.end - range.start + 1;
+						const start = Math.max(0, Math.min(range.start + shift, body.byteLength - length));
+						range = { start, end: start + length - 1 };
+					}
+
+					const part = body.subarray(range.start, range.end + 1);
+					response.writeHead(206, {
+						'content-type': contentType,
+						'content-length': String(part.byteLength),
+						'content-range': `bytes ${range.start}-${range.end}/${body.byteLength}`,
+						'accept-ranges': 'bytes',
+						'cache-control': 'no-store',
+					});
+					response.end(part);
+					return;
+				}
+
 				response.writeHead(200, {
 					'content-type': contentType,
 					'content-length': String(body.byteLength),
+					'accept-ranges': 'bytes',
 					// 検出結果のリセット規則を検証するため、キャッシュを効かせない
 					'cache-control': 'no-store',
 				});

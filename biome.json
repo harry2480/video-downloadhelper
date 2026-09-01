@@ -78,7 +78,8 @@
 			"!**/playwright-report",
 			"!**/test-results",
 			"!**/.claude",
-			"!**/test/fixtures"
+			"!**/test/fixtures",
+			"!**/public/ffmpeg"
 		]
 	}
 }

@@ -4,10 +4,12 @@ import type {
 	HlsAudioRendition,
 	HlsByteRange,
 	HlsEncryption,
+	HlsInitSegment,
 	HlsParseError,
 	HlsPlaylistKind,
 	HlsSegment,
 	HlsSegmentFormat,
+	HlsSegmentKey,
 	HlsVariantStream,
 	ParsedMasterPlaylist,
 	ParsedMediaPlaylist,
@@ -296,8 +298,23 @@ export function parseMediaPlaylist(
 	let targetDuration: number | undefined;
 	let hasEndList = false;
 	let isVodPlaylistType = false;
-	let encryption: HlsEncryption = { method: 'none' };
-	let initSegment: ParsedMediaPlaylist['initSegment'];
+	let mediaSequence = 0;
+
+	/**
+	 * 直近の #EXT-X-MAP。以降のセグメントへ適用される。
+	 * 切り替わらない限り同じオブジェクトを共有する（計画側が同一性で判定する）。
+	 */
+	let currentInit: HlsInitSegment | undefined;
+
+	/**
+	 * 直近の #EXT-X-KEY。以降のセグメントへ適用される。
+	 * METHOD=NONE で解除されるため、undefined へ戻ることもある。
+	 */
+	let currentKey: HlsSegmentKey | undefined;
+	/** DRM を 1 度でも見たか。要約の判定に使う */
+	let drmReason: string | undefined;
+	/** AES-128 を 1 度でも見たか。要約の判定に使う */
+	let sawAes = false;
 
 	let pendingDuration: number | undefined;
 	/**
@@ -338,23 +355,37 @@ export function parseMediaPlaylist(
 
 		if (line.startsWith('#EXT-X-KEY:')) {
 			const attributes = parseAttributeList(line.slice('#EXT-X-KEY:'.length));
-			const drmReason = detectDrmFromAttributes(attributes);
-			if (drmReason) {
-				encryption = { method: 'drm', reason: drmReason };
+			const drm = detectDrmFromAttributes(attributes);
+			if (drm) {
+				drmReason ??= drm;
+				// 復号しない方式。以降のセグメントは平文ではないので鍵を立てておく
+				currentKey = {};
 				continue;
 			}
 
+			// **METHOD の欠落を NONE と同一視しない。** METHOD は必須属性
+			// （RFC 8216 4.3.2.4）で、欠けているのは壊れたプレイリスト。
+			// 平文として扱うと、暗号文をそのまま連結して保存してしまう
 			const method = attributes.METHOD?.toUpperCase();
-			if (method === undefined || method === 'NONE') {
-				encryption = { method: 'none' };
+			if (method === 'NONE') {
+				currentKey = undefined;
+				continue;
+			}
+
+			sawAes = true;
+
+			// KEYFORMAT の既定は identity（URI が 16 バイトの鍵そのもの）。
+			// 別形式の鍵サーバーへ Cookie 付きで取りに行っても復号できない
+			const keyFormat = attributes.KEYFORMAT?.toLowerCase();
+			if (keyFormat !== undefined && keyFormat !== 'identity') {
+				currentKey = {};
 				continue;
 			}
 
 			if (method === 'AES-128' && attributes.URI !== undefined) {
 				const resolved = resolveUrl(attributes.URI, baseUrl);
 				if (!resolved.ok) return err({ type: 'invalid-uri', input: attributes.URI });
-				encryption = {
-					method: 'aes-128',
+				currentKey = {
 					keyUri: resolved.value,
 					...(attributes.IV !== undefined && { iv: attributes.IV }),
 				};
@@ -362,8 +393,13 @@ export function parseMediaPlaylist(
 			}
 
 			// URI が欠けている、または未知の METHOD。復号できない以上は
-			// 暗号化として扱う。none のまま通すと暗号文をそのまま保存してしまう
-			encryption = { method: 'aes-128' };
+			// 暗号化として扱う。鍵なしで通すと暗号文をそのまま保存してしまう
+			currentKey = {};
+			continue;
+		}
+
+		if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+			mediaSequence = parseNumber(line.slice('#EXT-X-MEDIA-SEQUENCE:'.length)) ?? 0;
 			continue;
 		}
 
@@ -374,11 +410,23 @@ export function parseMediaPlaylist(
 			const resolved = resolveUrl(attributes.URI, baseUrl);
 			if (!resolved.ok) return err({ type: 'invalid-uri', input: attributes.URI });
 
-			const range = attributes.BYTERANGE ? parseByteRange(attributes.BYTERANGE, 0) : undefined;
+			let range: HlsByteRange | undefined;
+			if (attributes.BYTERANGE !== undefined) {
+				range = parseByteRange(attributes.BYTERANGE, 0);
+				// 範囲なしへ落とすと、初期化セグメントとしてファイル全体を取得する
+				if (range === undefined) {
+					return err({ type: 'invalid-byterange', input: attributes.BYTERANGE });
+				}
+				// オフセット省略形は「同一 URI の直前の終端」から続く。
+				// 初期化セグメントも同じファイルを共有しうる
+				previousEndByUri.set(resolved.value, range.offset + range.length);
+			}
 
-			initSegment = {
+			currentInit = {
 				uri: resolved.value,
 				...(range && { byteRange: range }),
+				// RFC 8216 は初期化セグメントにも直前の #EXT-X-KEY を適用する
+				...(currentKey && { key: currentKey }),
 			};
 			continue;
 		}
@@ -390,12 +438,16 @@ export function parseMediaPlaylist(
 		if (!resolved.ok) return err({ type: 'invalid-uri', input: line });
 
 		// オフセット省略形は「同一 URI の直前のセグメントの終端」から続く
-		const byteRange =
-			pendingByteRangeValue === undefined
-				? undefined
-				: parseByteRange(pendingByteRangeValue, previousEndByUri.get(resolved.value));
+		let byteRange: HlsByteRange | undefined;
+		if (pendingByteRangeValue !== undefined) {
+			byteRange = parseByteRange(pendingByteRangeValue, previousEndByUri.get(resolved.value));
 
-		if (byteRange) {
+			// **範囲なしへ落とさない。** 落とすと計画も取得も「範囲指定なし」
+			// としか見えず、エラーにならないままファイル全体を取得して連結する
+			if (byteRange === undefined) {
+				return err({ type: 'invalid-byterange', input: pendingByteRangeValue });
+			}
+
 			previousEndByUri.set(resolved.value, byteRange.offset + byteRange.length);
 		}
 
@@ -403,6 +455,11 @@ export function parseMediaPlaylist(
 			uri: resolved.value,
 			duration: pendingDuration ?? 0,
 			...(byteRange && { byteRange }),
+			// 番号はループ後にまとめて割り当てる（#EXT-X-MEDIA-SEQUENCE が
+			// 先頭セグメントより後ろにあっても揃うようにするため）
+			sequenceNumber: 0,
+			...(currentKey && { key: currentKey }),
+			...(currentInit && { initSegment: currentInit }),
 		});
 
 		pendingDuration = undefined;
@@ -411,7 +468,21 @@ export function parseMediaPlaylist(
 
 	if (segments.length === 0) return err({ type: 'no-segments' });
 
+	// IV 省略時の導出に使う。ずれると復号は通るのに中身が壊れる
+	for (const [index, segment] of segments.entries()) {
+		segment.sequenceNumber = mediaSequence + index;
+	}
+
 	const totalDuration = segments.reduce((sum, segment) => sum + segment.duration, 0);
+
+	// **1 つでも該当すればその方式として扱う。** 途中から暗号化される
+	// プレイリストを平文扱いすると、暗号文をそのまま保存してしまう
+	const encryption: HlsEncryption =
+		drmReason !== undefined
+			? { method: 'drm', reason: drmReason }
+			: sawAes
+				? { method: 'aes-128' }
+				: { method: 'none' };
 
 	return ok({
 		kind: 'media',
@@ -419,8 +490,11 @@ export function parseMediaPlaylist(
 		...(targetDuration !== undefined && { targetDuration }),
 		totalDuration,
 		isLive: !hasEndList && !isVodPlaylistType,
-		segmentFormat: detectSegmentFormat(segments[0]?.uri, initSegment !== undefined),
-		...(initSegment && { initSegment }),
+		segmentFormat: detectSegmentFormat(
+			segments[0]?.uri,
+			segments.some((segment) => segment.initSegment !== undefined),
+		),
+		mediaSequence,
 		encryption,
 	});
 }

@@ -12,7 +12,7 @@ import type { AssemblerPort } from '../shared/ports/assembler.port';
  */
 
 const OFFSCREEN_PATH = 'src/offscreen/index.html';
-const JUSTIFICATION = 'HLS のセグメントを結合して保存用の Blob を作るため';
+const JUSTIFICATION = 'HLS / DASH のセグメントを結合して保存用の Blob を作るため';
 
 /**
  * 生成直後は受け手のスクリプトがまだ動いていないことがある。
@@ -82,9 +82,11 @@ export function createOffscreenHost(): AssemblerPort {
 		async start(job) {
 			await ensureDocument();
 			await send({
-				kind: 'assemble-hls',
+				kind: 'assemble',
 				taskId: job.taskId,
-				playlistUrl: job.playlistUrl,
+				manifestUrl: job.manifestUrl,
+				format: job.format,
+				...(job.representationId !== undefined && { representationId: job.representationId }),
 				maxBytes: job.maxBytes,
 				allowPrivateHosts: job.allowPrivateHosts,
 			});

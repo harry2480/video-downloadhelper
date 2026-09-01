@@ -21,8 +21,6 @@ type HlsAnalysis = {
 
 type HlsAnalysisError = { type: 'not-a-playlist' } | { type: 'unparsable' };
 
-/** Phase 1 は TS セグメントのみ対象。単純連結で .ts として出力する。 */
-const FMP4_UNSUPPORTED = 'fMP4 セグメントの HLS には未対応です';
 const DRM_UNSUPPORTED = 'この動画は DRM で保護されているため対応していません';
 const LIVE_UNSUPPORTED = 'ライブ配信の保存には未対応です';
 
@@ -83,10 +81,6 @@ function analyzeMedia(parsed: ParsedMediaPlaylist): HlsAnalysis {
 	if (parsed.isLive) {
 		return { ...(duration !== undefined && { duration }), unsupportedReason: LIVE_UNSUPPORTED };
 	}
-	if (parsed.segmentFormat === 'fmp4') {
-		return { ...(duration !== undefined && { duration }), unsupportedReason: FMP4_UNSUPPORTED };
-	}
-
 	return { ...(duration !== undefined && { duration }) };
 }
 

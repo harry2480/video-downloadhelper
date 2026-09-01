@@ -86,7 +86,12 @@ chrome.runtime.onMessage.addListener((raw, sender) => {
 
 	if (message.kind === 'assembly-done') {
 		fireAndForget(
-			downloads.handleAssemblyDone(message.taskId, message.objectUrl, message.bytes),
+			downloads.handleAssemblyDone(
+				message.taskId,
+				message.objectUrl,
+				message.bytes,
+				message.container,
+			),
 			'組み立て結果の保存',
 		);
 		return false;

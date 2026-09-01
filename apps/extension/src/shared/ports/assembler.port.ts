@@ -9,8 +9,17 @@
 export type AssemblyJob = {
 	/** 進捗と結果を突き合わせるための ID。DownloadTask の ID を使う */
 	taskId: string;
-	/** Media Playlist の絶対 URL */
-	playlistUrl: string;
+	/** HLS の Media Playlist、または DASH の MPD の絶対 URL */
+	manifestUrl: string;
+	/** マニフェストの種類。組み立て側の解析を分ける */
+	format: 'hls' | 'dash';
+	/**
+	 * DASH で保存する Representation の `id`。
+	 *
+	 * **位置でも URL でもなく、配信側が付けた識別子で選ぶ。** 位置は再解析で
+	 * 変わり、URL は署名付きなら取得のたびに変わる。
+	 */
+	representationId?: string;
 	/** 合計サイズの上限（バイト） */
 	maxBytes: number;
 	/**
