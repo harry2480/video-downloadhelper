@@ -38,3 +38,9 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      # アクションの更新は ci / coverage / verify の 3 ファイルを同時に触るため、
+      # 1 アクション 1 PR にすると必ず相互にコンフリクトする。まとめて 1 PR にする
+      github-actions:
+        patterns:
+          - "*"
