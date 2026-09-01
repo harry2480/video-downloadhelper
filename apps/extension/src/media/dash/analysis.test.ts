@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeMpd, hasSeparateAudio } from './analysis';
+import { analyzeMpd, findSeparateAudio } from './analysis';
 import { parseMpd } from './parser';
 
 /**
@@ -366,24 +366,24 @@ describe('analyzeMpd', () => {
 	});
 });
 
-describe('hasSeparateAudio', () => {
+describe('findSeparateAudio', () => {
 	function parse(content: string) {
 		const parsed = parseMpd(content, BASE);
 		if (!parsed.ok) throw new Error('parse failed');
 		return parsed.value;
 	}
 
-	it('音声の AdaptationSet があれば真', () => {
+	it('音声の AdaptationSet を返す', () => {
 		const parsed = parse(
 			mpd(
 				`${VIDEO_SET}<AdaptationSet contentType="audio"><Representation id="a" /></AdaptationSet>`,
 			),
 		);
 
-		expect(hasSeparateAudio(parsed)).toBe(true);
+		expect(findSeparateAudio(parsed)?.contentType).toBe('audio');
 	});
 
-	it('映像だけなら偽', () => {
-		expect(hasSeparateAudio(parse(mpd(VIDEO_SET)))).toBe(false);
+	it('映像だけなら undefined', () => {
+		expect(findSeparateAudio(parse(mpd(VIDEO_SET)))).toBeUndefined();
 	});
 });

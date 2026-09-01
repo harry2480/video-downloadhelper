@@ -5,8 +5,8 @@
  * 取得制御（`segment-download.ts`）はこの形だけを知る。
  */
 
-/** バイトレンジ（両端を含む範囲を offset/length で表す）。 */
-export type PlannedByteRange = {
+/** バイトレンジ（両端を含む範囲を offset/length で表す）。PlannedSegment からのみ参照する */
+type PlannedByteRange = {
 	offset: number;
 	length: number;
 };

@@ -4,7 +4,11 @@ import { planDashDownload } from '../processor/dash-download';
 import type { MediaContainer, PlannedSegment } from '../processor/download-plan';
 import { planHlsDownload } from '../processor/hls-download';
 import { type RunToken, createRunRegistry } from '../processor/run-registry';
-import { type SegmentDownloadError, downloadSegments } from '../processor/segment-download';
+import {
+	type SegmentDownloadError,
+	downloadSegments,
+	totalByteLength,
+} from '../processor/segment-download';
 import {
 	type BackgroundToOffscreen,
 	type OffscreenToBackground,
@@ -12,6 +16,7 @@ import {
 } from '../shared/messages';
 import { assembleBlob, releaseObjectUrl } from './blob-assembler';
 import { createDecryptor } from './decryptor.adapter';
+import { createFfmpegRunner } from './ffmpeg-runner';
 import { createSegmentFetcher } from './segment-fetcher';
 
 /**
@@ -29,6 +34,7 @@ const FETCH_FAILED = 'セグメントを取得できませんでした';
 const KEY_FAILED = '復号鍵を取得できませんでした';
 const DECRYPT_FAILED = 'セグメントを復号できませんでした';
 const RANGE_FAILED = '配信側がバイトレンジ指定に対応していませんでした';
+const MUX_FAILED = '映像と音声を結合できませんでした';
 const PLAYLIST_FAILED = 'マニフェストを取得できませんでした';
 const NOT_A_PLAYLIST = 'プレイリストとして解析できませんでした';
 const NOT_AN_MPD = 'MPD として解析できませんでした';
@@ -40,6 +46,8 @@ type AssembleCommand = Extract<BackgroundToOffscreen, { kind: 'assemble' }>;
 
 type AssemblyPlan = {
 	segments: readonly PlannedSegment[];
+	/** 音声が別立ての場合の並び。あるなら結合が要る */
+	audioSegments?: readonly PlannedSegment[];
 	container: MediaContainer;
 };
 
@@ -64,6 +72,21 @@ const runs = createRunRegistry();
  * storage への書き込みと Popup への配信が走る。
  */
 const PROGRESS_INTERVAL_MS = 500;
+
+/**
+ * 取得済みの並びを 1 本のバイト列にする。
+ *
+ * ffmpeg へ渡すには連続した領域が要る。Blob と違い、ここは複製が避けられない。
+ */
+function concat(parts: readonly Uint8Array<ArrayBuffer>[]): Uint8Array<ArrayBuffer> {
+	const merged = new Uint8Array(new ArrayBuffer(totalByteLength(parts)));
+	let offset = 0;
+	for (const part of parts) {
+		merged.set(part, offset);
+		offset += part.byteLength;
+	}
+	return merged;
+}
 
 function notify(message: OffscreenToBackground): void {
 	// Service Worker が停止していても、送信で起こされる
@@ -137,6 +160,8 @@ function buildPlan(
 
 		const plan = planDashDownload(parsed.value, {
 			allowPrivateHosts,
+			// 結合できる環境なので、映像と音声が分かれていても保存できる
+			canMux: true,
 			// 1 本で全体を成す構成（SegmentBase）では、セグメント 1 本ぶんの
 			// 上限では足りない。全体の上限をそのまま許す
 			singleSegmentMaxBytes: command.maxBytes,
@@ -176,36 +201,73 @@ async function assemble(command: AssembleCommand): Promise<void> {
 		return;
 	}
 
-	const total = plan.value.segments.length;
+	// 音声が別立てなら、その本数も進捗の分母に入れる
+	const audioPlan = plan.value.audioSegments ?? [];
+	const total = plan.value.segments.length + audioPlan.length;
 	let lastNotifiedAt = 0;
+	let fetchedBefore = 0;
+	let bytesBefore = 0;
 
-	const fetched = await downloadSegments({
-		segments: plan.value.segments,
-		fetcher,
-		// 暗号化されていなければ使われない。作るだけなら副作用はない
-		decryptor: createDecryptor(),
-		maxBytes,
-		onProgress: (completed, bytes) => {
-			if (!runs.isCurrent(taskId, run)) return;
+	/** 取得の共通設定。映像と音声で 2 回呼ぶため関数にする。 */
+	const fetchAll = (segments: readonly PlannedSegment[]) =>
+		downloadSegments({
+			segments,
+			fetcher,
+			// 暗号化されていなければ使われない。作るだけなら副作用はない
+			decryptor: createDecryptor(),
+			maxBytes,
+			onProgress: (completed, bytes) => {
+				if (!runs.isCurrent(taskId, run)) return;
 
-			const now = Date.now();
-			if (completed < total && now - lastNotifiedAt < PROGRESS_INTERVAL_MS) return;
+				const done = fetchedBefore + completed;
+				const now = Date.now();
+				if (done < total && now - lastNotifiedAt < PROGRESS_INTERVAL_MS) return;
 
-			lastNotifiedAt = now;
-			notify({ kind: 'assembly-progress', taskId, completed, total, bytes });
-		},
-		// 走り直された旧実行も、ここで自分から降りる
-		isCancelled: () => run.cancelled || !runs.isCurrent(taskId, run),
-	});
+				lastNotifiedAt = now;
+				notify({
+					kind: 'assembly-progress',
+					taskId,
+					completed: done,
+					total,
+					bytes: bytesBefore + bytes,
+				});
+			},
+			// 走り直された旧実行も、ここで自分から降りる
+			isCancelled: () => run.cancelled || !runs.isCurrent(taskId, run),
+		});
 
+	const fetched = await fetchAll(plan.value.segments);
 	if (!fetched.ok) {
 		fail(taskId, run, describeFailure(fetched.error));
 		return;
 	}
 
+	let parts = fetched.value;
+
+	if (audioPlan.length > 0) {
+		fetchedBefore = plan.value.segments.length;
+		bytesBefore = totalByteLength(fetched.value);
+
+		const audio = await fetchAll(audioPlan);
+		if (!audio.ok) {
+			fail(taskId, run, describeFailure(audio.error));
+			return;
+		}
+
+		// **結合してから 1 本にする。** 映像だけを保存すると
+		// 「音の出ない動画」が黙って出来上がる
+		const muxed = await createFfmpegRunner().mux(concat(fetched.value), concat(audio.value));
+		if (!muxed.ok) {
+			fail(taskId, run, MUX_FAILED);
+			return;
+		}
+
+		parts = [muxed.value];
+	}
+
 	// **中身に合った MIME タイプを付ける。** fMP4 を video/mp2t として
 	// 保存すると、保存先によっては拡張子まで書き換えられる
-	const assembled = assembleBlob(fetched.value, MIME_BY_CONTAINER[plan.value.container]);
+	const assembled = assembleBlob(parts, MIME_BY_CONTAINER[plan.value.container]);
 
 	// 走り直された旧実行の結果は渡さない。渡すと新しい実行の結果として扱われる
 	if (!runs.isCurrent(taskId, run)) {

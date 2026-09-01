@@ -19,6 +19,7 @@ const CONTENT_TYPES: Record<string, string> = {
 	'.mpd': 'application/dash+xml',
 	'.ts': 'video/mp2t',
 	'.m4s': 'video/iso.segment',
+	'.m4a': 'audio/mp4',
 };
 
 /**
