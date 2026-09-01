@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readBytesWithinLimit, readTextWithinLimit } from './stream';
+import { discardBody, readBytesWithinLimit, readTextWithinLimit } from './stream';
 
 /**
  * マニフェスト取得の入口。上限を超えたものを読み切らないことが要点で、
@@ -72,5 +72,65 @@ describe('readBytesWithinLimit', () => {
 		const read = await readBytesWithinLimit(null, 100);
 
 		expect(read).toEqual({ ok: true, bytes: new Uint8Array(new ArrayBuffer(0)) });
+	});
+});
+
+describe('上限超過時の打ち切り', () => {
+	/** cancel が失敗するストリーム。既に壊れている応答を模す。 */
+	function failingCancelStream(): ReadableStream<Uint8Array> {
+		return new ReadableStream({
+			pull(controller) {
+				controller.enqueue(new Uint8Array(1024).fill(0x41));
+			},
+			cancel() {
+				throw new Error('cancel failed');
+			},
+		});
+	}
+
+	it('readTextWithinLimit は cancel の失敗を伝えない', async () => {
+		// 伝えると呼び出し側の catch に落ち、too-large が network にすり替わる
+		await expect(readTextWithinLimit(failingCancelStream(), 512)).resolves.toEqual({ ok: false });
+	});
+
+	it('readBytesWithinLimit は cancel の失敗を伝えない', async () => {
+		await expect(readBytesWithinLimit(failingCancelStream(), 512)).resolves.toEqual({ ok: false });
+	});
+});
+
+describe('discardBody', () => {
+	it('本文を cancel する', async () => {
+		let cancelled = false;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				controller.enqueue(encode('x'));
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+
+		await discardBody(body);
+
+		expect(cancelled).toBe(true);
+	});
+
+	it('本文が無くても落ちない', async () => {
+		await expect(discardBody(null)).resolves.toBeUndefined();
+	});
+
+	it('cancel が失敗しても例外を出さない', async () => {
+		// 呼び出し側は try の中でこれを待つ。ここで投げると
+		// http-error が network にすり替わる
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				controller.enqueue(encode('x'));
+			},
+			cancel() {
+				throw new Error('cancel failed');
+			},
+		});
+
+		await expect(discardBody(body)).resolves.toBeUndefined();
 	});
 });

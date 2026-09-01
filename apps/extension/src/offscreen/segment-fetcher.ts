@@ -1,5 +1,5 @@
 import type { SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
-import { readBytesWithinLimit, readTextWithinLimit } from '../shared/stream';
+import { discardBody, readBytesWithinLimit, readTextWithinLimit } from '../shared/stream';
 import { err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
 
 /**
@@ -55,7 +55,7 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 
 		// リダイレクトで方針の外へ出ていたら、本文を読まずに捨てる
 		if (response.url !== '' && !isAllowed(response.url)) {
-			await response.body?.cancel();
+			await discardBody(response.body);
 			return undefined;
 		}
 
@@ -72,13 +72,13 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 
 				if (!response.ok) {
 					// ボディを捨てて接続を解放する。読まないまま放置しない
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return err({ reason: 'http-error', status: response.status });
 				}
 
 				const declared = Number(response.headers.get('content-length'));
 				if (Number.isFinite(declared) && declared > MAX_SEGMENT_BYTES) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return err({ reason: 'too-large' });
 				}
 
@@ -102,13 +102,13 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 				if (response === undefined) return { ok: false };
 
 				if (!response.ok) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return { ok: false };
 				}
 
 				const declared = Number(response.headers.get('content-length'));
 				if (Number.isFinite(declared) && declared > MAX_MANIFEST_BYTES) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return { ok: false };
 				}
 
