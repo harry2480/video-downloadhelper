@@ -148,7 +148,7 @@ describe('状態の遷移', () => {
 			progress: 40,
 			downloadedBytes: 400,
 			totalBytes: 1_000,
-			variantId: 'v1',
+			variantKey: 'quality-key',
 		});
 
 		const restarted = resetDownloadTask(failed, 2_000);
@@ -157,7 +157,7 @@ describe('状態の遷移', () => {
 			status: 'queued',
 			progress: 0,
 			filename: 'video.mp4',
-			variantId: 'v1',
+			variantKey: 'quality-key',
 			startedAt: 2_000,
 		});
 		expect(restarted).not.toHaveProperty('error');
