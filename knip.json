@@ -1,5 +1,5 @@
 {
-	"$schema": "https://unpkg.com/knip@5/schema.json",
+	"$schema": "https://unpkg.com/knip@6/schema.json",
 	"workspaces": {
 		"apps/extension": {
 			"entry": [
@@ -9,8 +9,7 @@
 				"src/popup/main.tsx",
 				"scripts/*.mjs"
 			],
-			"project": "src/**/*.{ts,tsx}",
-			"ignoreDependencies": ["tailwindcss"]
+			"project": "src/**/*.{ts,tsx,css}"
 		}
 	}
 }
