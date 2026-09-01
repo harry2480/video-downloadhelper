@@ -1,4 +1,5 @@
 import { downloadRejectionReason, resolveDownloadUrl } from '../media/downloadable';
+import { variantKey } from '../media/variant-selection';
 import {
 	applyDownloadSnapshot,
 	isActive,
@@ -7,6 +8,7 @@ import {
 	resetDownloadTask,
 } from '../processor/download-task';
 import { buildFilename } from '../processor/filename';
+import type { HlsContainer } from '../processor/hls-download';
 import type { AssemblerPort } from '../shared/ports/assembler.port';
 import type { DownloadStartFailure, DownloaderPort } from '../shared/ports/download.port';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';
@@ -45,6 +47,7 @@ const STALE_QUEUED_MS = 60_000;
 const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 
 const MEDIA_GONE = 'メディアが見つかりませんでした（ページを再読み込みしてください）';
+const VARIANT_GONE = '選択した画質が見つかりませんでした（選び直してください）';
 const TOO_LARGE = '推定サイズが上限（2GB）を超えるため保存できません';
 const ASSEMBLY_FAILED = 'セグメントの取得を開始できませんでした';
 const LOST = 'ダウンロードの状況を取得できなくなりました';
@@ -86,11 +89,18 @@ export class DownloadManager {
 
 			const media = (await this.registry.list(tabId)).find((item) => item.id === request.mediaId);
 
-			const variant = findVariant(media, request.variantId);
+			const lookup = lookupVariant(media, request.variantKey);
+			const variant = lookup.kind === 'found' ? lookup.variant : undefined;
 			const task = this.createTask(tabId, request, media, variant);
 
 			if (media === undefined) {
 				await this.commit([markDownloadFailed(task, MEDIA_GONE), ...tasks], tabId);
+				return;
+			}
+
+			// 選ばれていた画質が消えているなら、既定へ落とさず失敗させる
+			if (lookup.kind === 'gone') {
+				await this.commit([markDownloadFailed(task, VARIANT_GONE), ...tasks], tabId);
 				return;
 			}
 
@@ -136,10 +146,17 @@ export class DownloadManager {
 			const media = (await this.registry.list(target.tabId)).find(
 				(item) => item.id === target.mediaId,
 			);
-			const variant = findVariant(media, target.variantId);
+			const lookup = lookupVariant(media, target.variantKey);
+			const variant = lookup.kind === 'found' ? lookup.variant : undefined;
 
 			if (media === undefined) {
 				await this.commit(replace(tasks, markDownloadFailed(target, MEDIA_GONE)), target.tabId);
+				return;
+			}
+
+			// 再試行までの間に再解析が挟まると、覚えていた画質が消えていることがある
+			if (lookup.kind === 'gone') {
+				await this.commit(replace(tasks, markDownloadFailed(target, VARIANT_GONE)), target.tabId);
 				return;
 			}
 
@@ -262,8 +279,8 @@ export class DownloadManager {
 		return {
 			id: this.createId(),
 			mediaId: request.mediaId,
-			...(request.variantId !== undefined && { variantId: request.variantId }),
-			...(request.audioVariantId !== undefined && { audioVariantId: request.audioVariantId }),
+			...(request.variantKey !== undefined && { variantKey: request.variantKey }),
+			...(request.audioVariantKey !== undefined && { audioVariantKey: request.audioVariantKey }),
 			tabId,
 			filename: media === undefined ? '' : buildFilename({ media, variant }),
 			status: 'queued',
@@ -298,7 +315,12 @@ export class DownloadManager {
 	}
 
 	/** 組み立てが終わった。出来上がった Blob をブラウザへ渡して保存する。 */
-	async handleAssemblyDone(taskId: string, objectUrl: string, bytes: number): Promise<void> {
+	async handleAssemblyDone(
+		taskId: string,
+		objectUrl: string,
+		bytes: number,
+		container: HlsContainer,
+	): Promise<void> {
 		await this.enqueue(async () => {
 			const tasks = await this.repository.findAll();
 			const target = tasks.find((task) => task.id === taskId);
@@ -309,7 +331,16 @@ export class DownloadManager {
 				return;
 			}
 
-			const ready: DownloadTask = { ...target, objectUrl, totalBytes: bytes, progress: 100 };
+			// **拡張子は出来上がったものに合わせる。** タスクを作る時点では
+			// Media Playlist を読んでいないため、HLS は一律 .ts になっている。
+			// fMP4 を .ts で保存すると、プレイヤーが開けないファイルになる
+			const ready: DownloadTask = {
+				...target,
+				filename: withExtension(target.filename, container),
+				objectUrl,
+				totalBytes: bytes,
+				progress: 100,
+			};
 			await this.commit(replace(tasks, ready), ready.tabId);
 			await this.begin(ready, objectUrl);
 		});
@@ -527,16 +558,41 @@ function replace(tasks: readonly DownloadTask[], updated: DownloadTask): Downloa
 	return tasks.map((task) => (task.id === updated.id ? updated : task));
 }
 
+/**
+ * 保存名の拡張子を差し替える。
+ *
+ * 既に同じ拡張子なら触らない。ベース名にドットが含まれていても、
+ * 最後のドットより後ろだけを見る。
+ */
+function withExtension(filename: string, container: HlsContainer): string {
+	const dotIndex = filename.lastIndexOf('.');
+	const base = dotIndex <= 0 ? filename : filename.slice(0, dotIndex);
+	return `${base}.${container}`;
+}
+
 function toBrowserId(task: DownloadTask): number[] {
 	return task.browserDownloadId === undefined ? [] : [task.browserDownloadId];
 }
 
-function findVariant(
-	media: DetectedMedia | undefined,
-	variantId: string | undefined,
-): MediaVariant | undefined {
-	if (media === undefined || variantId === undefined) return undefined;
-	return media.variants?.find((variant) => variant.id === variantId);
+/**
+ * 要求された品質を、いまの検出結果から引き直した結果。
+ *
+ * **「指定なし」と「指定されたが見つからない」を分ける。** 混同すると
+ * `resolveDownloadUrl` が `media.sourceUrl`（HLS なら Master Playlist）へ
+ * フォールバックし、動画のつもりでプレイリストを保存してしまう。
+ */
+type VariantLookup =
+	/** 品質の指定がない。既定（メディア自身の URL）でよい */
+	| { kind: 'unspecified' }
+	| { kind: 'found'; variant: MediaVariant }
+	/** 指定はあったが、いまの一覧に無い。再解析で入れ替わった場合など */
+	| { kind: 'gone' };
+
+function lookupVariant(media: DetectedMedia | undefined, key: string | undefined): VariantLookup {
+	if (key === undefined) return { kind: 'unspecified' };
+
+	const variant = media?.variants?.find((item) => variantKey(item) === key);
+	return variant === undefined ? { kind: 'gone' } : { kind: 'found', variant };
 }
 
 function describe(failure: DownloadStartFailure): string {

@@ -115,11 +115,17 @@ export type DetectedMedia = {
 export type DownloadRequest = {
 	mediaId: string;
 
-	/** 選択した映像品質。未指定なら既定（最高品質）を使う */
-	variantId?: string;
+	/**
+	 * 選択した映像品質。未指定なら既定（最高品質）を使う。
+	 *
+	 * **variant の `id` ではなく `variantKey()` の値を載せる。** `id` は解析時の
+	 * 並び順で振る位置ベースの値で、再解析で別の品質を指しうる
+	 * （`media/variant-selection.ts`）。
+	 */
+	variantKey?: string;
 
 	/** 映像と音声が分離している場合の音声。Phase 2 の DASH で使う */
-	audioVariantId?: string;
+	audioVariantKey?: string;
 };
 
 /** ダウンロードの状態（要件定義 5.4）。DownloadTask からのみ参照する。 */
@@ -138,8 +144,10 @@ export type DownloadTask = {
 	id: string;
 
 	mediaId: string;
-	variantId?: string;
-	audioVariantId?: string;
+
+	/** 要求時に選ばれていた品質。`media/variant-selection.ts` の `variantKey()` の値 */
+	variantKey?: string;
+	audioVariantKey?: string;
 
 	tabId: number;
 

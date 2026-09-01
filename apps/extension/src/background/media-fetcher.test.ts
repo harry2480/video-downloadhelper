@@ -10,6 +10,34 @@ import { createMediaFetcher } from './media-fetcher.adapter';
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
+/** cancel されたことを観測できる Response を作る。 */
+function cancellableResponse(options: {
+	status?: number;
+	contentLength?: string;
+	cancelThrows?: boolean;
+}): { response: Response; wasCancelled: () => boolean } {
+	let cancelled = false;
+
+	const stream = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			// 読み切られない本文。捨てていなければ開いたまま残る
+			controller.enqueue(new Uint8Array(16).fill(0x41));
+		},
+		cancel() {
+			cancelled = true;
+			if (options.cancelThrows === true) throw new Error('cancel failed');
+		},
+	});
+
+	const headers = new Headers();
+	if (options.contentLength !== undefined) headers.set('content-length', options.contentLength);
+
+	return {
+		response: new Response(stream, { status: options.status ?? 200, headers }),
+		wasCancelled: () => cancelled,
+	};
+}
+
 /** 指定バイト列をチャンクに分けて返す Response を作る。 */
 function streamedResponse(
 	bytes: Uint8Array,
@@ -83,6 +111,53 @@ describe('fetchText', () => {
 		expect(await fetcher.fetchText('https://cdn.example.com/v.m3u8')).toEqual({
 			ok: true,
 			text: '',
+		});
+	});
+
+	describe('読まない本文の破棄', () => {
+		it('HTTP エラーなら本文を捨てる', async () => {
+			// 読まないまま放置すると、ストリームと接続が GC まで解放されない。
+			// 検出のたびに再フェッチする経路なので積み上がる
+			const { response, wasCancelled } = cancellableResponse({ status: 403 });
+			const fetcher = fetcherReturning(response);
+
+			expect(await fetcher.fetchText('https://cdn.example.com/v.m3u8')).toEqual({
+				ok: false,
+				reason: 'http-error',
+				status: 403,
+			});
+			expect(wasCancelled()).toBe(true);
+		});
+
+		it('Content-Length で弾いたときも本文を捨てる', async () => {
+			const { response, wasCancelled } = cancellableResponse({
+				contentLength: String(MAX_BYTES + 1),
+			});
+			const fetcher = fetcherReturning(response);
+
+			expect(await fetcher.fetchText('https://cdn.example.com/v.m3u8')).toEqual({
+				ok: false,
+				reason: 'too-large',
+			});
+			expect(wasCancelled()).toBe(true);
+		});
+
+		it('破棄自体が失敗しても理由をすり替えない', async () => {
+			// 素の body.cancel() を try の中で待つと、既に壊れている
+			// ストリームで例外が飛び、http-error が network になる
+			const { response, wasCancelled } = cancellableResponse({
+				status: 500,
+				cancelThrows: true,
+			});
+			const fetcher = fetcherReturning(response);
+
+			expect(await fetcher.fetchText('https://cdn.example.com/v.m3u8')).toEqual({
+				ok: false,
+				reason: 'http-error',
+				status: 500,
+			});
+			// 投げたということは、破棄自体は試みられている
+			expect(wasCancelled()).toBe(true);
 		});
 	});
 

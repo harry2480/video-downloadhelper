@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectionInput } from '../media/detected-media.model';
+import { variantKey } from '../media/variant-selection';
 import type { AssemblerPort, AssemblyJob } from '../shared/ports/assembler.port';
 import type {
 	DownloadSnapshot,
@@ -199,7 +200,10 @@ describe('start', () => {
 			],
 		});
 
-		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v1' });
+		await harness.manager.start(TAB_ID, {
+			mediaId: media.id,
+			variantKey: variantKey({ id: 'v1', url: 'https://cdn.example.com/720.mp4', height: 720 }),
+		});
 
 		expect(harness.started[0]?.url).toBe('https://cdn.example.com/720.mp4');
 		expect(harness.tasks[0]?.filename).toBe('サンプル動画_720p.mp4');
@@ -213,10 +217,64 @@ describe('start', () => {
 			variants: [{ id: 'v0', url: 'file:///etc/passwd', height: 1080 }],
 		});
 
-		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v0' });
+		await harness.manager.start(TAB_ID, {
+			mediaId: media.id,
+			variantKey: variantKey({ id: 'v0', url: 'file:///etc/passwd', height: 1080 }),
+		});
 
 		expect(harness.started).toHaveLength(0);
 		expect(harness.tasks[0]?.status).toBe('failed');
+	});
+
+	it('選択した画質が一覧から消えていたら、既定へ落とさず失敗させる', async () => {
+		// **一致しなかったことを「未指定」と混同しない。** 混同すると
+		// resolveDownloadUrl が media.sourceUrl（HLS なら Master Playlist）へ
+		// フォールバックし、動画のつもりでプレイリストを保存してしまう
+		const harness = createHarness();
+		const media = await harness.detectHls();
+		await harness.enrich(media.dedupeKey, {
+			variants: [{ id: 'v0', url: 'https://cdn.example.com/1080/index.m3u8', height: 1080 }],
+		});
+
+		await harness.manager.start(TAB_ID, {
+			mediaId: media.id,
+			variantKey: variantKey({ id: 'v9', url: 'https://cdn.example.com/gone.m3u8', height: 240 }),
+		});
+
+		expect(harness.jobs).toHaveLength(0);
+		expect(harness.started).toHaveLength(0);
+		expect(harness.tasks[0]).toMatchObject({
+			status: 'failed',
+			error: expect.stringContaining('選択した画質'),
+		});
+	});
+
+	it('再試行までの間に画質が消えていたら失敗させる', async () => {
+		// 再解析は再試行を待たない。覚えていた画質が無くなっていることがある
+		const harness = createHarness();
+		const media = await harness.detectHls();
+		const chosen = { id: 'v1', url: 'https://cdn.example.com/720/index.m3u8', height: 720 };
+		await harness.enrich(media.dedupeKey, {
+			variants: [
+				{ id: 'v0', url: 'https://cdn.example.com/1080/index.m3u8', height: 1080 },
+				chosen,
+			],
+		});
+
+		await harness.manager.start(TAB_ID, { mediaId: media.id, variantKey: variantKey(chosen) });
+		const taskId = harness.tasks[0]?.id as string;
+		await harness.manager.cancel(taskId);
+
+		// 720p が消える
+		await harness.enrich(media.dedupeKey, {
+			variants: [{ id: 'v0', url: 'https://cdn.example.com/1080/index.m3u8', height: 1080 }],
+		});
+		await harness.manager.retry(taskId);
+
+		expect(harness.tasks[0]).toMatchObject({
+			status: 'failed',
+			error: expect.stringContaining('選択した画質'),
+		});
 	});
 
 	it('DRM 保護されたメディアは保存しない', async () => {
@@ -283,7 +341,14 @@ describe('start', () => {
 			],
 		});
 
-		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v1' });
+		await harness.manager.start(TAB_ID, {
+			mediaId: media.id,
+			variantKey: variantKey({
+				id: 'v1',
+				url: 'https://cdn.example.com/720/index.m3u8',
+				height: 720,
+			}),
+		});
 
 		expect(harness.jobs[0]?.playlistUrl).toBe('https://cdn.example.com/720/index.m3u8');
 	});
@@ -302,7 +367,14 @@ describe('start', () => {
 			],
 		});
 
-		await harness.manager.start(TAB_ID, { mediaId: media.id, variantId: 'v0' });
+		await harness.manager.start(TAB_ID, {
+			mediaId: media.id,
+			variantKey: variantKey({
+				id: 'v0',
+				url: 'https://cdn.example.com/1080/index.m3u8',
+				estimatedSize: 3 * 1024 * 1024 * 1024,
+			}),
+		});
 
 		expect(harness.jobs).toHaveLength(0);
 		expect(harness.tasks[0]).toMatchObject({
@@ -479,7 +551,7 @@ describe('組み立ての通知', () => {
 	it('組み立てが終わったらブラウザへ保存を依頼する', async () => {
 		const { harness, taskId } = await startAssembly();
 
-		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234);
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234, 'ts');
 
 		expect(harness.started[0]?.url).toBe('blob:chrome-extension://x/abc');
 		expect(harness.tasks[0]).toMatchObject({
@@ -489,10 +561,30 @@ describe('組み立ての通知', () => {
 		});
 	});
 
+	it('fMP4 として組み上がったら拡張子を mp4 に直す', async () => {
+		// タスクを作る時点では Media Playlist を読んでいないため、HLS は
+		// 一律 .ts になっている。fMP4 を .ts で保存するとプレイヤーが開けない
+		const { harness, taskId } = await startAssembly();
+
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10, 'mp4');
+
+		expect(harness.tasks[0]?.filename.endsWith('.mp4')).toBe(true);
+		expect(harness.started[0]?.filename.endsWith('.mp4')).toBe(true);
+	});
+
+	it('TS のままなら拡張子を変えない', async () => {
+		const { harness, taskId } = await startAssembly();
+		const before = harness.tasks[0]?.filename;
+
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10, 'ts');
+
+		expect(harness.tasks[0]?.filename).toBe(before);
+	});
+
 	it('保存し終えたらオブジェクト URL を解放する', async () => {
 		// 抱えたままにするとメモリに残り続ける
 		const { harness, taskId } = await startAssembly();
-		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234);
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234, 'ts');
 
 		harness.setSnapshots([
 			{ downloadId: 1, state: 'complete', bytesReceived: 1_234, totalBytes: 1_234 },
@@ -506,7 +598,7 @@ describe('組み立ての通知', () => {
 		const { harness, taskId } = await startAssembly();
 		await harness.manager.cancel(taskId);
 
-		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234);
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 1_234, 'ts');
 
 		expect(harness.started).toHaveLength(0);
 		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
@@ -557,7 +649,7 @@ describe('組み立ての通知', () => {
 		const { harness, taskId } = await startAssembly();
 		harness.failStart({ reason: 'denied' });
 
-		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10, 'ts');
 
 		expect(harness.tasks[0]?.status).toBe('failed');
 		expect(harness.released).toEqual(['blob:chrome-extension://x/abc']);
@@ -566,7 +658,7 @@ describe('組み立ての通知', () => {
 	it('保存中のオブジェクト URL はタブを閉じても解放しない', async () => {
 		// 読み込み中に失効させると、保存されたファイルが壊れる
 		const { harness, taskId } = await startAssembly();
-		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10, 'ts');
 
 		await harness.manager.forgetTab(TAB_ID);
 
@@ -576,7 +668,7 @@ describe('組み立ての通知', () => {
 
 	it('タブを閉じた後でも保存の完了を見届けて解放する', async () => {
 		const { harness, taskId } = await startAssembly();
-		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10, 'ts');
 		await harness.manager.forgetTab(TAB_ID);
 
 		harness.setSnapshots([{ downloadId: 1, state: 'complete', bytesReceived: 10, totalBytes: 10 }]);
@@ -588,7 +680,7 @@ describe('組み立ての通知', () => {
 	it('保存が始まっていないタスクはタブを閉じたら解放する', async () => {
 		const { harness, taskId } = await startAssembly();
 		harness.failStart({ reason: 'denied' });
-		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10);
+		await harness.manager.handleAssemblyDone(taskId, 'blob:chrome-extension://x/abc', 10, 'ts');
 		harness.released.length = 0;
 
 		await harness.manager.forgetTab(TAB_ID);

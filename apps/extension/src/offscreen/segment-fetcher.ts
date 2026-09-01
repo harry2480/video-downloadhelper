@@ -1,5 +1,5 @@
-import type { SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
-import { readBytesWithinLimit, readTextWithinLimit } from '../shared/stream';
+import type { FetchByteRange, SegmentFetcherPort } from '../shared/ports/segment-fetcher.port';
+import { discardBody, readBytesWithinLimit, readTextWithinLimit } from '../shared/stream';
 import { err, isHttpUrl, isPrivateHostUrl, ok } from '../shared/utils';
 
 /**
@@ -37,6 +37,25 @@ type FetcherOptions = {
 	fetchImpl?: typeof fetch;
 };
 
+/**
+ * 応答が要求どおりの範囲かを `Content-Range` で確かめる。
+ *
+ * ヘッダーを返さないサーバーもあるため、**無い場合は判定しない**
+ * （206 と実長の検証は別に効いている）。返してきた場合に食い違いを見逃さない。
+ */
+function matchesRequestedRange(response: Response, range: FetchByteRange): boolean {
+	const header = response.headers.get('content-range');
+	if (header === null) return true;
+
+	const matched = /^bytes\s+(\d+)-(\d+)\//.exec(header.trim());
+	// 解析できない形。範囲を確かめられない以上、そのまま連結しない
+	if (matched === null) return false;
+
+	return (
+		Number(matched[1]) === range.offset && Number(matched[2]) === range.offset + range.length - 1
+	);
+}
+
 export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFetcher {
 	const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -46,16 +65,20 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 		return options.allowPrivateHosts === true || !isPrivateHostUrl(url);
 	}
 
-	async function request(url: string): Promise<Response | undefined> {
+	async function request(url: string, range?: FetchByteRange): Promise<Response | undefined> {
 		const response = await fetchImpl(url, {
 			credentials: 'include',
 			redirect: 'follow',
 			signal: AbortSignal.timeout(TIMEOUT_MS),
+			// Range は両端を含む。length が 0 の範囲は要求しない（下で弾く）
+			...(range !== undefined && {
+				headers: { Range: `bytes=${range.offset}-${range.offset + range.length - 1}` },
+			}),
 		});
 
 		// リダイレクトで方針の外へ出ていたら、本文を読まずに捨てる
 		if (response.url !== '' && !isAllowed(response.url)) {
-			await response.body?.cancel();
+			await discardBody(response.body);
 			return undefined;
 		}
 
@@ -63,29 +86,62 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 	}
 
 	return {
-		async fetchBytes(url) {
+		async fetchBytes(url, fetchOptions) {
 			if (!isAllowed(url)) return err({ reason: 'network' });
 
+			const range = fetchOptions?.range;
+			// 長さ 0 の範囲は Range ヘッダーとして表現できない
+			if (range !== undefined && (range.length <= 0 || range.offset < 0)) {
+				return err({ reason: 'range-not-satisfied' });
+			}
+
 			try {
-				const response = await request(url);
+				const response = await request(url, range);
 				if (response === undefined) return err({ reason: 'network' });
 
 				if (!response.ok) {
 					// ボディを捨てて接続を解放する。読まないまま放置しない
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return err({ reason: 'http-error', status: response.status });
 				}
 
+				// **Range を無視するサーバーがある。** 206 で返らないなら
+				// 全体が返っている可能性が高い。気づかずに連結すると、
+				// 同じ内容を繰り返した壊れたファイルになる
+				if (range !== undefined && response.status !== 206) {
+					await discardBody(response.body);
+					return err({ reason: 'range-not-satisfied' });
+				}
+
+				// **206 は「要求した範囲」を保証しない。** 同じ長さの別範囲を
+				// 返すサーバーでは長さの検証も通り、中身がずれたまま連結される
+				if (range !== undefined && !matchesRequestedRange(response, range)) {
+					await discardBody(response.body);
+					return err({ reason: 'range-not-satisfied' });
+				}
+
+				// 呼び出し側の上限・範囲の長さ・既定の上限のうち最も小さいものを使う
+				const limit = Math.min(
+					fetchOptions?.maxBytes ?? Number.POSITIVE_INFINITY,
+					range?.length ?? Number.POSITIVE_INFINITY,
+					MAX_SEGMENT_BYTES,
+				);
+
 				const declared = Number(response.headers.get('content-length'));
-				if (Number.isFinite(declared) && declared > MAX_SEGMENT_BYTES) {
-					await response.body?.cancel();
+				if (Number.isFinite(declared) && declared > limit) {
+					await discardBody(response.body);
 					return err({ reason: 'too-large' });
 				}
 
 				// 読みながら測る。Content-Length を返さない応答では
 				// 確保してから測っても手遅れになる
-				const read = await readBytesWithinLimit(response.body, MAX_SEGMENT_BYTES);
+				const read = await readBytesWithinLimit(response.body, limit);
 				if (!read.ok) return err({ reason: 'too-large' });
+
+				// 206 でも短い応答が返ることがある。足りないまま連結しない
+				if (range !== undefined && read.bytes.byteLength !== range.length) {
+					return err({ reason: 'range-not-satisfied' });
+				}
 
 				return ok(read.bytes);
 			} catch {
@@ -102,13 +158,13 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 				if (response === undefined) return { ok: false };
 
 				if (!response.ok) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return { ok: false };
 				}
 
 				const declared = Number(response.headers.get('content-length'));
 				if (Number.isFinite(declared) && declared > MAX_MANIFEST_BYTES) {
-					await response.body?.cancel();
+					await discardBody(response.body);
 					return { ok: false };
 				}
 

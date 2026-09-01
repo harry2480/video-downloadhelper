@@ -10,6 +10,35 @@
  */
 
 /**
+ * 読まない本文を捨てる。
+ *
+ * 早期 return で本文を放置すると、ストリームと接続が GC まで解放されない。
+ * 検出のたびに再フェッチする経路では積み上がる。
+ *
+ * **cancel 自体の失敗で呼び出し側の結果を塗り替えないこと。** try の中で
+ * 素の `body.cancel()` を待つと、既にエラーになっているストリームで例外が
+ * 飛び、`http-error` が `network` にすり替わる。
+ */
+export async function discardBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+	if (body === null) return;
+	await cancelQuietly(() => body.cancel());
+}
+
+/**
+ * cancel の失敗を呼び出し側へ伝えない。
+ *
+ * 読み取り中のストリームは、reader がロックを持っているため
+ * `body.cancel()` を呼べない。呼び分けはここに閉じる。
+ */
+async function cancelQuietly(cancel: () => Promise<unknown>): Promise<void> {
+	try {
+		await cancel();
+	} catch {
+		// 既に壊れているストリーム。捨てるという目的は果たされている
+	}
+}
+
+/**
  * 上限を超えない範囲で本文をテキストとして読む。
  *
  * 上限を超えた時点で読み取りを打ち切り、失敗として返す。
@@ -33,7 +62,8 @@ export async function readTextWithinLimit(
 		const value = result.value;
 		total += value.byteLength;
 		if (total > maxBytes) {
-			await reader.cancel();
+			// ここで例外を伝えると too-large が network にすり替わる
+			await cancelQuietly(() => reader.cancel());
 			return { ok: false };
 		}
 		chunks.push(value);
@@ -74,7 +104,8 @@ export async function readBytesWithinLimit(
 		const value = result.value;
 		total += value.byteLength;
 		if (total > maxBytes) {
-			await reader.cancel();
+			// ここで例外を伝えると too-large が network にすり替わる
+			await cancelQuietly(() => reader.cancel());
 			return { ok: false };
 		}
 		chunks.push(value);

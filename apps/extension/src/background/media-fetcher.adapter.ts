@@ -1,5 +1,5 @@
 import type { FetchTextResult, MediaFetcherPort } from '../shared/ports/media-fetcher.port';
-import { readTextWithinLimit } from '../shared/stream';
+import { discardBody, readTextWithinLimit } from '../shared/stream';
 
 /**
  * マニフェスト再フェッチの実装。
@@ -28,11 +28,15 @@ export function createMediaFetcher(fetchImpl: typeof fetch = fetch): MediaFetche
 					signal: AbortSignal.timeout(TIMEOUT_MS),
 				});
 
-				if (!response.ok) return { ok: false, reason: 'http-error', status: response.status };
+				if (!response.ok) {
+					await discardBody(response.body);
+					return { ok: false, reason: 'http-error', status: response.status };
+				}
 
 				// 明らかに大きいものは読む前に弾く。ただしこれだけに頼らない
 				const declaredLength = Number(response.headers.get('content-length'));
 				if (Number.isFinite(declaredLength) && declaredLength > MAX_MANIFEST_BYTES) {
+					await discardBody(response.body);
 					return { ok: false, reason: 'too-large' };
 				}
 

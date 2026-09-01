@@ -79,7 +79,14 @@ export type OffscreenToBackground =
 			total: number;
 			bytes: number;
 	  }
-	| { kind: 'assembly-done'; taskId: string; objectUrl: string; bytes: number }
+	| {
+			kind: 'assembly-done';
+			taskId: string;
+			objectUrl: string;
+			bytes: number;
+			/** 出来上がったファイルのコンテナ。保存名の拡張子を合わせるために使う */
+			container: 'ts' | 'mp4';
+	  }
 	/** 理由はユーザーへ出せる文言にしてから送る */
 	| { kind: 'assembly-failed'; taskId: string; reason: string };
 
@@ -163,6 +170,21 @@ function parseId(value: unknown): string | undefined {
 }
 
 /**
+ * 省略可能な識別子。**値があるのに不正なら、要求ごと捨てる。**
+ *
+ * 黙って未指定として扱うと「既定の対象で保存する」ことになる。HLS では
+ * 既定の対象が Master Playlist なので、動画のつもりでプレイリストを
+ * 保存してしまう。選べなかったことは、通してから失敗させるより
+ * 受け取らない方がよい。
+ */
+function parseOptionalId(value: unknown): { ok: true; value?: string } | { ok: false } {
+	if (value === undefined) return { ok: true };
+
+	const parsed = parseId(value);
+	return parsed === undefined ? { ok: false } : { ok: true, value: parsed };
+}
+
+/**
  * Popup から届いたメッセージを検証する。
  *
  * Port の送信元は接続時に検証済みだが、形の検証はここで行う。
@@ -180,15 +202,18 @@ export function parsePopupMessage(raw: unknown): PopupToBackground | undefined {
 		const mediaId = parseId(raw.request.mediaId);
 		if (mediaId === undefined) return undefined;
 
-		const variantId = parseId(raw.request.variantId);
-		const audioVariantId = parseId(raw.request.audioVariantId);
+		const variantKey = parseOptionalId(raw.request.variantKey);
+		if (!variantKey.ok) return undefined;
+
+		const audioVariantKey = parseOptionalId(raw.request.audioVariantKey);
+		if (!audioVariantKey.ok) return undefined;
 
 		return {
 			kind: 'start-download',
 			request: {
 				mediaId,
-				...(variantId !== undefined && { variantId }),
-				...(audioVariantId !== undefined && { audioVariantId }),
+				...(variantKey.value !== undefined && { variantKey: variantKey.value }),
+				...(audioVariantKey.value !== undefined && { audioVariantKey: audioVariantKey.value }),
 			},
 		};
 	}
@@ -238,7 +263,10 @@ export function parseOffscreenMessage(raw: unknown): OffscreenToBackground | und
 		// 信頼境界で形を確かめておく
 		if (!objectUrl.startsWith('blob:')) return undefined;
 
-		return { kind: 'assembly-done', taskId, objectUrl, bytes };
+		// 拡張子の決定に使う。知らない値を通すと保存名が壊れる
+		if (raw.container !== 'ts' && raw.container !== 'mp4') return undefined;
+
+		return { kind: 'assembly-done', taskId, objectUrl, bytes, container: raw.container };
 	}
 
 	if (raw.kind === 'assembly-failed') {

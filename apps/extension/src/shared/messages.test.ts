@@ -171,23 +171,38 @@ describe('parsePopupMessage', () => {
 	it('選択された品質を引き継ぐ', () => {
 		const parsed = parsePopupMessage({
 			kind: 'start-download',
-			request: { mediaId: '1:https://a/v.m3u8', variantId: 'v1', audioVariantId: 'a0' },
+			request: { mediaId: '1:https://a/v.m3u8', variantKey: 'k1', audioVariantKey: 'a0' },
 		});
 
 		expect(parsed).toEqual({
 			kind: 'start-download',
-			request: { mediaId: '1:https://a/v.m3u8', variantId: 'v1', audioVariantId: 'a0' },
+			request: { mediaId: '1:https://a/v.m3u8', variantKey: 'k1', audioVariantKey: 'a0' },
 		});
 	});
 
-	it('品質の指定が壊れていても要求自体は通す', () => {
-		// 品質が選べないだけで、既定の品質なら保存できる
-		const parsed = parsePopupMessage({
-			kind: 'start-download',
-			request: { mediaId: '1:https://a/v.mp4', variantId: 42 },
-		});
+	it('品質の指定が壊れていたら要求ごと捨てる', () => {
+		// **既定へ落とさない。** 未指定として扱うと「既定の対象で保存する」
+		// ことになり、HLS では Master Playlist をそのまま保存してしまう
+		expect(
+			parsePopupMessage({
+				kind: 'start-download',
+				request: { mediaId: '1:https://a/v.mp4', variantKey: 42 },
+			}),
+		).toBeUndefined();
 
-		expect(parsed).toEqual({ kind: 'start-download', request: { mediaId: '1:https://a/v.mp4' } });
+		expect(
+			parsePopupMessage({
+				kind: 'start-download',
+				request: { mediaId: '1:https://a/v.mp4', variantKey: '' },
+			}),
+		).toBeUndefined();
+
+		expect(
+			parsePopupMessage({
+				kind: 'start-download',
+				request: { mediaId: '1:https://a/v.mp4', audioVariantKey: 'x'.repeat(4_097) },
+			}),
+		).toBeUndefined();
 	});
 
 	it('中止・再試行の要求を通す', () => {
@@ -243,13 +258,37 @@ describe('parseOffscreenMessage', () => {
 				taskId: 't1',
 				objectUrl: 'blob:chrome-extension://x/abc',
 				bytes: 10,
+				container: 'mp4',
 			}),
 		).toEqual({
 			kind: 'assembly-done',
 			taskId: 't1',
 			objectUrl: 'blob:chrome-extension://x/abc',
 			bytes: 10,
+			container: 'mp4',
 		});
+	});
+
+	it('知らないコンテナは通さない', () => {
+		// 保存名の拡張子に使う。知らない値を通すとファイル名が壊れる
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-done',
+				taskId: 't1',
+				objectUrl: 'blob:chrome-extension://x/abc',
+				bytes: 10,
+				container: 'mkv',
+			}),
+		).toBeUndefined();
+
+		expect(
+			parseOffscreenMessage({
+				kind: 'assembly-done',
+				taskId: 't1',
+				objectUrl: 'blob:chrome-extension://x/abc',
+				bytes: 10,
+			}),
+		).toBeUndefined();
 	});
 
 	it('失敗の理由を通す', () => {

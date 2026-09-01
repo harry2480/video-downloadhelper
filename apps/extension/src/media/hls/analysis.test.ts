@@ -140,13 +140,24 @@ b.ts
 			expect(unwrap(analyzeHlsManifest(content, BASE_URL)).unsupportedReason).toBeUndefined();
 		});
 
-		it('fMP4 セグメントは Phase 1 では対応外', () => {
+		it('fMP4 セグメントも対応外にしない', () => {
+			// 初期化セグメントを先頭に置いて結合すれば mp4 として保存できる
 			const content = `#EXTM3U
 #EXT-X-MAP:URI="init.mp4"
 #EXTINF:6.0,
 a.m4s
 #EXT-X-ENDLIST`;
-			expect(unwrap(analyzeHlsManifest(content, BASE_URL)).unsupportedReason).toContain('fMP4');
+			expect(unwrap(analyzeHlsManifest(content, BASE_URL)).unsupportedReason).toBeUndefined();
+		});
+
+		it('AES-128 も対応外にしない', () => {
+			// 鍵を取得して復号する。復号できない場合は保存計画の側で弾く
+			const content = `#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="key.bin"
+#EXTINF:6.0,
+a.ts
+#EXT-X-ENDLIST`;
+			expect(unwrap(analyzeHlsManifest(content, BASE_URL)).unsupportedReason).toBeUndefined();
 		});
 
 		it('ライブは対応外', () => {
@@ -154,7 +165,7 @@ a.m4s
 			expect(unwrap(analyzeHlsManifest(content, BASE_URL)).unsupportedReason).toContain('ライブ');
 		});
 
-		it('DRM はライブや fMP4 より優先して理由にする', () => {
+		it('DRM はライブより優先して理由にする', () => {
 			const content = `#EXTM3U
 #EXT-X-KEY:METHOD=SAMPLE-AES,KEYFORMAT="com.apple.streamingkeydelivery",URI="skd://x"
 #EXT-X-MAP:URI="init.mp4"

@@ -50,6 +50,85 @@ test('Service Worker が background のバンドルを実行している', async
 	});
 });
 
+/** manifest が宣言しているアイコンのサイズ。生成スクリプトの SIZES と対になる。 */
+const ICON_SIZES = [16, 32, 48, 128] as const;
+
+test('manifest のアイコンが実際に解決できる', async () => {
+	// icons / default_icon のパスがずれていても、ビルドも typecheck も通り、
+	// Chrome は拡張機能をロードする。既定のアイコンが出るだけなので、
+	// 目視しない限り気づけない。実寸と「描かれているか」まで確かめて、
+	// リサイズ漏れとラスタライズ失敗も塞ぐ。
+	const worker = extension.context.serviceWorkers()[0];
+	expect(worker).toBeDefined();
+
+	const resolved = await worker?.evaluate(async () => {
+		const manifest = chrome.runtime.getManifest();
+		const declared: Record<string, Record<string, string>> = {
+			icons: (manifest.icons ?? {}) as Record<string, string>,
+			// 文字列を 1 つだけ指定する形も manifest 上は妥当。ここでは表形式のみ扱う
+			default_icon: (manifest.action?.default_icon ?? {}) as Record<string, string>,
+		};
+
+		const results: {
+			field: string;
+			size: string;
+			ok: boolean;
+			width: number;
+			height: number;
+			visible: boolean;
+		}[] = [];
+
+		for (const [field, table] of Object.entries(declared)) {
+			for (const [size, path] of Object.entries(table)) {
+				try {
+					const response = await fetch(chrome.runtime.getURL(path));
+					if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+					// PNG として実際に復号できることまで確かめる
+					const bitmap = await createImageBitmap(await response.blob());
+					const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+					const context = canvas.getContext('2d');
+					if (context === null) throw new Error('2d コンテキストを取得できませんでした');
+
+					context.drawImage(bitmap, 0, 0);
+					const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+
+					results.push({
+						field,
+						size,
+						ok: true,
+						width: bitmap.width,
+						height: bitmap.height,
+						// 全面透明でも「解決できる」ため、不透明な画素があることを見る
+						visible: pixels.some((value, i) => i % 4 === 3 && value > 0),
+					});
+					bitmap.close();
+				} catch {
+					// 未登録のリソースへの fetch は 404 ではなく TypeError になる。
+					// ここで握らないと evaluate ごと落ち、どのサイズが壊れたか差分に出ない
+					results.push({ field, size, ok: false, width: 0, height: 0, visible: false });
+				}
+			}
+		}
+
+		return results;
+	});
+
+	// Chrome Web Store の提出には 128x128 が必須（docs/インフラストラクチャ規約.md）
+	expect(resolved).toEqual(
+		['icons', 'default_icon'].flatMap((field) =>
+			ICON_SIZES.map((size) => ({
+				field,
+				size: String(size),
+				ok: true,
+				width: size,
+				height: size,
+				visible: true,
+			})),
+		),
+	);
+});
+
 test('ポップアップが表示される', async () => {
 	const page = await extension.context.newPage();
 	await page.goto(popupUrl(extension.extensionId));

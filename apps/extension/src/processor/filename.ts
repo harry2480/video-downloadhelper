@@ -69,7 +69,8 @@ function truncateToByteLength(input: string, maxBytes: number): string {
 }
 
 const EXTENSION_BY_TYPE: Record<MediaType, string> = {
-	// Phase 1 の HLS は TS セグメントの単純連結。.ts として出力する
+	// 既定は TS セグメントの単純連結。fMP4 と分かった時点で mp4 へ直す
+	// （組み立て結果のコンテナを見て background/download-manager.ts が更新する）
 	hls: 'ts',
 	dash: 'mp4',
 	direct: 'mp4',
