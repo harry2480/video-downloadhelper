@@ -8,7 +8,8 @@ import type { Result } from '../utils';
  * だけを知り、実装は実行コンテキスト層が注入する。
  */
 
-export type DecryptFailure = { reason: 'decrypt-failed' };
+/** 復号できなかった理由。DecryptorPort からのみ参照する */
+type DecryptFailure = { reason: 'decrypt-failed' };
 
 export type DecryptorPort = {
 	/**

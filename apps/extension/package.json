@@ -13,7 +13,7 @@
 		"test:coverage": "vitest run --coverage",
 		"test:integration": "vitest run --config vitest.integration.config.ts",
 		"test:e2e": "playwright test",
-		"depcruise": "depcruise src --config .dependency-cruiser.cjs"
+		"depcruise": "node scripts/check-dependency-boundaries.mjs"
 	},
 	"dependencies": {
 		"@ffmpeg/ffmpeg": "^0.12.15",
@@ -28,12 +28,12 @@
 		"@testing-library/jest-dom": "^7.0.1",
 		"@testing-library/react": "^16.3.3",
 		"@testing-library/user-event": "^14.6.6",
-		"@types/chrome": "^0.1.43",
+		"@types/chrome": "^0.2.7",
 		"@types/react": "^19.2.18",
 		"@types/react-dom": "^19.2.5",
-		"@vitejs/plugin-react": "^5.2.0",
+		"@vitejs/plugin-react": "^6.1.1",
 		"@vitest/coverage-v8": "^4.1.11",
-		"dependency-cruiser": "^17.4.3",
+		"dependency-cruiser": "^18.2.0",
 		"jsdom": "^30.0.1",
 		"tailwindcss": "^4.3.3",
 		"typescript": "^5.9.3",
