@@ -2,14 +2,13 @@
 <html lang="ja">
 	<head>
 		<meta charset="UTF-8" />
-		<title>fMP4 セグメントの HLS</title>
+		<title>要求と違う範囲を返す HLS</title>
 	</head>
 	<body>
-		<h1>fMP4 セグメント</h1>
-		<p>初期化セグメント（#EXT-X-MAP）を持つ HLS。</p>
+		<h1>要求と違う範囲を返す HLS</h1>
 		<script>
 			const request = new XMLHttpRequest();
-			request.open('GET', 'hls/fmp4.m3u8');
+			request.open('GET', 'hls/ranged-shifted.m3u8');
 			request.send();
 		</script>
 	</body>

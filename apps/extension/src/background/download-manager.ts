@@ -8,6 +8,7 @@ import {
 	resetDownloadTask,
 } from '../processor/download-task';
 import { buildFilename } from '../processor/filename';
+import type { HlsContainer } from '../processor/hls-download';
 import type { AssemblerPort } from '../shared/ports/assembler.port';
 import type { DownloadStartFailure, DownloaderPort } from '../shared/ports/download.port';
 import type { DownloadTaskRepository } from '../shared/storage/download-task.repository';
@@ -314,7 +315,12 @@ export class DownloadManager {
 	}
 
 	/** 組み立てが終わった。出来上がった Blob をブラウザへ渡して保存する。 */
-	async handleAssemblyDone(taskId: string, objectUrl: string, bytes: number): Promise<void> {
+	async handleAssemblyDone(
+		taskId: string,
+		objectUrl: string,
+		bytes: number,
+		container: HlsContainer,
+	): Promise<void> {
 		await this.enqueue(async () => {
 			const tasks = await this.repository.findAll();
 			const target = tasks.find((task) => task.id === taskId);
@@ -325,7 +331,16 @@ export class DownloadManager {
 				return;
 			}
 
-			const ready: DownloadTask = { ...target, objectUrl, totalBytes: bytes, progress: 100 };
+			// **拡張子は出来上がったものに合わせる。** タスクを作る時点では
+			// Media Playlist を読んでいないため、HLS は一律 .ts になっている。
+			// fMP4 を .ts で保存すると、プレイヤーが開けないファイルになる
+			const ready: DownloadTask = {
+				...target,
+				filename: withExtension(target.filename, container),
+				objectUrl,
+				totalBytes: bytes,
+				progress: 100,
+			};
 			await this.commit(replace(tasks, ready), ready.tabId);
 			await this.begin(ready, objectUrl);
 		});
@@ -541,6 +556,18 @@ function forTab(tasks: readonly DownloadTask[], tabId: number): DownloadTask[] {
 
 function replace(tasks: readonly DownloadTask[], updated: DownloadTask): DownloadTask[] {
 	return tasks.map((task) => (task.id === updated.id ? updated : task));
+}
+
+/**
+ * 保存名の拡張子を差し替える。
+ *
+ * 既に同じ拡張子なら触らない。ベース名にドットが含まれていても、
+ * 最後のドットより後ろだけを見る。
+ */
+function withExtension(filename: string, container: HlsContainer): string {
+	const dotIndex = filename.lastIndexOf('.');
+	const base = dotIndex <= 0 ? filename : filename.slice(0, dotIndex);
+	return `${base}.${container}`;
 }
 
 function toBrowserId(task: DownloadTask): number[] {

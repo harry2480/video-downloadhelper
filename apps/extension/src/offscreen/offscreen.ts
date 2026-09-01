@@ -1,13 +1,14 @@
 import { detectPlaylistKind, parseMediaPlaylist } from '../media/hls/parser';
-import { planHlsDownload } from '../processor/hls-download';
+import { type HlsContainer, planHlsDownload } from '../processor/hls-download';
 import { type RunToken, createRunRegistry } from '../processor/run-registry';
-import { downloadSegments } from '../processor/segment-download';
+import { type SegmentDownloadError, downloadSegments } from '../processor/segment-download';
 import {
 	type BackgroundToOffscreen,
 	type OffscreenToBackground,
 	parseAssemblyCommand,
 } from '../shared/messages';
 import { assembleBlob, releaseObjectUrl } from './blob-assembler';
+import { createDecryptor } from './decryptor.adapter';
 import { createSegmentFetcher } from './segment-fetcher';
 
 /**
@@ -22,6 +23,9 @@ import { createSegmentFetcher } from './segment-fetcher';
  */
 
 const FETCH_FAILED = 'セグメントを取得できませんでした';
+const KEY_FAILED = '復号鍵を取得できませんでした';
+const DECRYPT_FAILED = 'セグメントを復号できませんでした';
+const RANGE_FAILED = '配信側がバイトレンジ指定に対応していませんでした';
 const PLAYLIST_FAILED = 'プレイリストを取得できませんでした';
 const NOT_A_PLAYLIST = 'プレイリストとして解析できませんでした';
 const MASTER_PLAYLIST = '画質を選び直してからもう一度お試しください';
@@ -29,6 +33,12 @@ const TOO_LARGE = 'サイズが上限を超えたため中止しました';
 const CANCELLED = 'ダウンロードを中止しました';
 
 type AssembleCommand = Extract<BackgroundToOffscreen, { kind: 'assemble-hls' }>;
+
+/** 出力するコンテナに対応する MIME タイプ。 */
+const MIME_BY_CONTAINER: Record<HlsContainer, string> = {
+	ts: 'video/mp2t',
+	mp4: 'video/mp4',
+};
 
 /**
  * 進行中の組み立て。
@@ -67,10 +77,38 @@ function fail(taskId: string, run: RunToken, reason: string): void {
  * **送れなかったら自分で解放する。** 受け手が居なければ、この Blob を
  * 解放できる者が居なくなる（Offscreen Document は閉じない）。
  */
-function notifyDone(taskId: string, objectUrl: string, bytes: number): void {
-	void chrome.runtime.sendMessage({ kind: 'assembly-done', taskId, objectUrl, bytes }).catch(() => {
-		releaseObjectUrl(objectUrl);
-	});
+function notifyDone(
+	taskId: string,
+	objectUrl: string,
+	bytes: number,
+	container: HlsContainer,
+): void {
+	void chrome.runtime
+		.sendMessage({ kind: 'assembly-done', taskId, objectUrl, bytes, container })
+		.catch(() => {
+			releaseObjectUrl(objectUrl);
+		});
+}
+
+/**
+ * 取得の失敗を、そのままユーザーへ出せる文言にする。
+ *
+ * 引数を `SegmentDownloadError` で受けて網羅させる。緩い型にすると、
+ * 種別を足したときに既定の文言へ黙って丸まる。
+ */
+function describeFailure(error: SegmentDownloadError): string {
+	switch (error.type) {
+		case 'too-large':
+			return TOO_LARGE;
+		case 'key-failed':
+			return KEY_FAILED;
+		case 'decrypt-failed':
+			return DECRYPT_FAILED;
+		case 'cancelled':
+			return CANCELLED;
+		case 'fetch-failed':
+			return error.failure.reason === 'range-not-satisfied' ? RANGE_FAILED : FETCH_FAILED;
+	}
 }
 
 async function assemble(command: AssembleCommand): Promise<void> {
@@ -104,12 +142,14 @@ async function assemble(command: AssembleCommand): Promise<void> {
 		return;
 	}
 
-	const total = plan.value.segmentUrls.length;
+	const total = plan.value.segments.length;
 	let lastNotifiedAt = 0;
 
 	const fetched = await downloadSegments({
-		urls: plan.value.segmentUrls,
+		segments: plan.value.segments,
 		fetcher,
+		// 暗号化されていなければ使われない。作るだけなら副作用はない
+		decryptor: createDecryptor(),
 		maxBytes,
 		onProgress: (completed, bytes) => {
 			if (!runs.isCurrent(taskId, run)) return;
@@ -125,15 +165,13 @@ async function assemble(command: AssembleCommand): Promise<void> {
 	});
 
 	if (!fetched.ok) {
-		if (fetched.error.type === 'cancelled') {
-			fail(taskId, run, CANCELLED);
-			return;
-		}
-		fail(taskId, run, fetched.error.type === 'too-large' ? TOO_LARGE : FETCH_FAILED);
+		fail(taskId, run, describeFailure(fetched.error));
 		return;
 	}
 
-	const assembled = assembleBlob(fetched.value);
+	// **中身に合った MIME タイプを付ける。** fMP4 を video/mp2t として
+	// 保存すると、保存先によっては拡張子まで書き換えられる
+	const assembled = assembleBlob(fetched.value, MIME_BY_CONTAINER[plan.value.container]);
 
 	// 走り直された旧実行の結果は渡さない。渡すと新しい実行の結果として扱われる
 	if (!runs.isCurrent(taskId, run)) {
@@ -142,7 +180,7 @@ async function assemble(command: AssembleCommand): Promise<void> {
 	}
 
 	runs.end(taskId, run);
-	notifyDone(taskId, assembled.objectUrl, assembled.bytes);
+	notifyDone(taskId, assembled.objectUrl, assembled.bytes, plan.value.container);
 }
 
 chrome.runtime.onMessage.addListener((raw, sender) => {
