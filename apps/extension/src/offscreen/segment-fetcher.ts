@@ -37,6 +37,25 @@ type FetcherOptions = {
 	fetchImpl?: typeof fetch;
 };
 
+/**
+ * 応答が要求どおりの範囲かを `Content-Range` で確かめる。
+ *
+ * ヘッダーを返さないサーバーもあるため、**無い場合は判定しない**
+ * （206 と実長の検証は別に効いている）。返してきた場合に食い違いを見逃さない。
+ */
+function matchesRequestedRange(response: Response, range: FetchByteRange): boolean {
+	const header = response.headers.get('content-range');
+	if (header === null) return true;
+
+	const matched = /^bytes\s+(\d+)-(\d+)\//.exec(header.trim());
+	// 解析できない形。範囲を確かめられない以上、そのまま連結しない
+	if (matched === null) return false;
+
+	return (
+		Number(matched[1]) === range.offset && Number(matched[2]) === range.offset + range.length - 1
+	);
+}
+
 export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFetcher {
 	const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -90,6 +109,13 @@ export function createSegmentFetcher(options: FetcherOptions = {}): OffscreenFet
 				// 全体が返っている可能性が高い。気づかずに連結すると、
 				// 同じ内容を繰り返した壊れたファイルになる
 				if (range !== undefined && response.status !== 206) {
+					await response.body?.cancel();
+					return err({ reason: 'range-not-satisfied' });
+				}
+
+				// **206 は「要求した範囲」を保証しない。** 同じ長さの別範囲を
+				// 返すサーバーでは長さの検証も通り、中身がずれたまま連結される
+				if (range !== undefined && !matchesRequestedRange(response, range)) {
 					await response.body?.cancel();
 					return err({ reason: 'range-not-satisfied' });
 				}

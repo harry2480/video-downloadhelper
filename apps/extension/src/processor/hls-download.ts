@@ -20,6 +20,7 @@ import type { MediaContainer, PlannedSegment } from './download-plan';
 const LIVE = 'ライブ配信の保存には未対応です';
 const DRM = 'この動画は DRM で保護されているため対応していません';
 const NO_KEY = '復号に必要な鍵の情報が見つかりませんでした';
+const NO_INIT_IV = '初期化セグメントの IV が指定されていないため復号できません';
 const NO_SEGMENTS = 'セグメントが見つかりませんでした';
 const UNSAFE_SEGMENT = '取得できない URL のセグメントが含まれています';
 const UNSAFE_KEY = '取得できない URL の鍵が指定されています';
@@ -85,13 +86,19 @@ export function planHlsDownload(
 		// #EXT-X-MAP は不連続点をまたいで変わりうる。1 本目だけを
 		// 先頭に置くと、後半のセグメントが誤った初期化データと組み合わされる
 		if (segment.initSegment !== undefined && !isSameInitSegment(segment.initSegment, emittedInit)) {
+			// **暗号化された #EXT-X-MAP に IV は必須**（RFC 8216 4.3.2.5）。
+			// 番号からの導出は規定されておらず、実際の IV と違えば AES-CBC の
+			// 先頭ブロックだけが壊れる。ftyp を含む先頭が壊れた mp4 は
+			// 再生できないのに、保存は成功したように見える
+			if (segment.initSegment.key !== undefined && segment.initSegment.key.iv === undefined) {
+				return err({ reason: NO_INIT_IV });
+			}
+
 			const planned = planSegment(
 				segment.initSegment.uri,
 				segment.initSegment.byteRange,
 				segment.initSegment.key,
-				// RFC 8216 は暗号化された #EXT-X-MAP に IV 属性を求めており、
-				// 番号からの導出は規定されていない。欠けている場合の
-				// フォールバックとして、続くセグメントと同じ番号を使う
+				// IV は上で必須にしてあるため、この番号は使われない
 				segment.sequenceNumber,
 				options,
 			);

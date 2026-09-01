@@ -363,8 +363,11 @@ export function parseMediaPlaylist(
 				continue;
 			}
 
+			// **METHOD の欠落を NONE と同一視しない。** METHOD は必須属性
+			// （RFC 8216 4.3.2.4）で、欠けているのは壊れたプレイリスト。
+			// 平文として扱うと、暗号文をそのまま連結して保存してしまう
 			const method = attributes.METHOD?.toUpperCase();
-			if (method === undefined || method === 'NONE') {
+			if (method === 'NONE') {
 				currentKey = undefined;
 				continue;
 			}
