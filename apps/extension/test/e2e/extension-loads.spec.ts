@@ -138,6 +138,34 @@ test('ポップアップが表示される', async () => {
 	await page.close();
 });
 
+test('ポップアップがコンソールへ警告もエラーも出さない', async () => {
+	// **`<link rel="modulepreload" crossorigin>` は拡張機能では逆効果。**
+	// crossorigin により先読みが CORS モードで走り、本体のモジュール取得
+	// （同一オリジン）と食い違う。Chrome は先読み結果を捨てて取り直すため、
+	// ポップアップを開くたびに無駄な取得と警告が出ていた
+	//
+	//   A preload for '...' is found, but is not used because it is a
+	//   cross-world extension resource mismatch.
+	const page = await extension.context.newPage();
+
+	const messages: string[] = [];
+	page.on('console', (message) => {
+		if (message.type() !== 'warning' && message.type() !== 'error') return;
+		messages.push(`${message.type()}: ${message.text()}`);
+	});
+	page.on('pageerror', (error) => messages.push(`pageerror: ${error.message}`));
+
+	await page.goto(popupUrl(extension.extensionId));
+	await expect(page.getByRole('heading', { name: 'Video Download Helper' })).toBeVisible();
+
+	// 先読みの警告は読み込み完了から数秒後に出る。待たないと素通りする
+	await page.waitForTimeout(3_000);
+
+	expect(messages).toEqual([]);
+
+	await page.close();
+});
+
 test('ポップアップが要件どおりの幅で描画される', async () => {
 	const page = await extension.context.newPage();
 	await page.goto(popupUrl(extension.extensionId));
