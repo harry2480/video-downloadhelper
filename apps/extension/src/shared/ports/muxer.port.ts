@@ -8,7 +8,8 @@ import type { Result } from '../utils';
  * コアロジック層はこの interface だけを知る。
  */
 
-export type MuxFailure = { reason: 'mux-failed' };
+/** 結合できなかった理由。MuxerPort からのみ参照する */
+type MuxFailure = { reason: 'mux-failed' };
 
 export type MuxerPort = {
 	/**
